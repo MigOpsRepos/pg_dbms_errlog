@@ -1,0 +1,122 @@
+LOAD 'pg_dbms_errlog';
+SET pg_dbms_errlog.synchronous = on;
+-- Create the error log table for relation t1
+CALL dbms_errlog.create_error_log('t1');
+SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
+ count 
+-------
+     1
+(1 row)
+
+-- Set error log behavior for this DML batch
+SET pg_dbms_errlog.query_tag TO 'daily_load';
+SET pg_dbms_errlog.reject_limit TO 25;
+SET pg_dbms_errlog.enabled TO true;
+-- Start a transaction
+BEGIN;
+-- Insert will fail
+SAVEPOINT aze;
+INSERT INTO t1 VALUES ('10.4');
+ROLLBACK TO aze;
+SELECT * FROM "ERR$_t1";
+ pg_err_number$ |                 pg_err_mesg$                 | pg_err_optyp$ | pg_err_tag$ |          pg_err_query$          |                               pg_err_detail$                                
+----------------+----------------------------------------------+---------------+-------------+---------------------------------+-----------------------------------------------------------------------------
+ 22P02          | invalid input syntax for type bigint: "10.4" | I             | daily_load  | INSERT INTO t1 VALUES ('10.4'); | ERROR:  22P02: invalid input syntax for type bigint: "10.4" at character 24+
+                |                                              |               |             |                                 | STATEMENT:  INSERT INTO t1 VALUES ('10.4');                                +
+                |                                              |               |             |                                 | 
+(1 row)
+
+-- Insert successful
+INSERT INTO t1 VALUES (1);
+-- Insert will fail on duplicate key
+SAVEPOINT aze;
+INSERT INTO t1 VALUES (1);
+ROLLBACK TO aze;
+SELECT * FROM "ERR$_t1";
+ pg_err_number$ |                       pg_err_mesg$                       | pg_err_optyp$ | pg_err_tag$ |          pg_err_query$          |                               pg_err_detail$                                
+----------------+----------------------------------------------------------+---------------+-------------+---------------------------------+-----------------------------------------------------------------------------
+ 22P02          | invalid input syntax for type bigint: "10.4"             | I             | daily_load  | INSERT INTO t1 VALUES ('10.4'); | ERROR:  22P02: invalid input syntax for type bigint: "10.4" at character 24+
+                |                                                          |               |             |                                 | STATEMENT:  INSERT INTO t1 VALUES ('10.4');                                +
+                |                                                          |               |             |                                 | 
+ 23505          | duplicate key value violates unique constraint "t1_pkey" | I             | daily_load  | INSERT INTO t1 VALUES (1);      | ERROR:  23505: duplicate key value violates unique constraint "t1_pkey"    +
+                |                                                          |               |             |                                 | DETAIL:  Key (a)=(1) already exists.                                       +
+                |                                                          |               |             |                                 | STATEMENT:  INSERT INTO t1 VALUES (1);                                     +
+                |                                                          |               |             |                                 | 
+(2 rows)
+
+PREPARE prep_insert AS INSERT INTO t1 VALUES ($1);
+-- Insert successful
+SAVEPOINT aze;
+EXECUTE prep_insert(2);
+ROLLBACK TO aze;
+-- Insert will fail
+SAVEPOINT aze;
+EXECUTE prep_insert('10.5');
+ROLLBACK TO aze;
+DEALLOCATE prep_insert;
+ROLLBACK;
+-- Looking at error logging table
+\x
+SELECT * FROM "ERR$_t1";
+-[ RECORD 1 ]--+----------------------------------------------------------------------------
+pg_err_number$ | 22P02
+pg_err_mesg$   | invalid input syntax for type bigint: "10.4"
+pg_err_optyp$  | I
+pg_err_tag$    | daily_load
+pg_err_query$  | INSERT INTO t1 VALUES ('10.4');
+pg_err_detail$ | ERROR:  22P02: invalid input syntax for type bigint: "10.4" at character 24+
+               | STATEMENT:  INSERT INTO t1 VALUES ('10.4');                                +
+               | 
+-[ RECORD 2 ]--+----------------------------------------------------------------------------
+pg_err_number$ | 23505
+pg_err_mesg$   | duplicate key value violates unique constraint "t1_pkey"
+pg_err_optyp$  | I
+pg_err_tag$    | daily_load
+pg_err_query$  | INSERT INTO t1 VALUES (1);
+pg_err_detail$ | ERROR:  23505: duplicate key value violates unique constraint "t1_pkey"    +
+               | DETAIL:  Key (a)=(1) already exists.                                       +
+               | STATEMENT:  INSERT INTO t1 VALUES (1);                                     +
+               | 
+-[ RECORD 3 ]--+----------------------------------------------------------------------------
+pg_err_number$ | 22P02
+pg_err_mesg$   | invalid input syntax for type bigint: "10.5"
+pg_err_optyp$  | I
+pg_err_tag$    | daily_load
+pg_err_query$  | PREPARE prep_insert AS INSERT INTO t1 VALUES ($1);
+pg_err_detail$ | ERROR:  22P02: invalid input syntax for type bigint: "10.5" at character 21+
+               | STATEMENT:  EXECUTE prep_insert('10.5');                                   +
+               | 
+
+\x
+-- Dropping one of the table
+BEGIN;
+DROP TABLE "ERR$_t1";
+SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
+ count 
+-------
+     0
+(1 row)
+
+ROLLBACK;
+SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
+ count 
+-------
+     1
+(1 row)
+
+BEGIN;
+DROP TABLE t1;
+SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
+ count 
+-------
+     0
+(1 row)
+
+ROLLBACK;
+SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
+ count 
+-------
+     1
+(1 row)
+
+DROP TABLE "ERR$_t1";

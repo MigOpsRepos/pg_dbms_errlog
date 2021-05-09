@@ -1,0 +1,6 @@
+# pg_error extension, requires pg_statement_rollback
+comment = 'Emulate DBMS_ERRLOG Oracle module but in a simplistic way.'
+default_version = '1.0'
+module_pathname = '$libdir/pg_dbms_errlog'
+relocatable = false
+schema = 'dbms_errlog'
