@@ -399,10 +399,13 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			current_dml_kind = '?';
 	}
 
-	if (queryDesc->params && queryDesc->params->numParams > 0)
-		current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, -1);
-	else
-		current_bind_parameters = NULL;
+	if (!pel_done)
+	{
+		if (queryDesc->params && queryDesc->params->numParams > 0)
+			current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, -1);
+		else
+			current_bind_parameters = NULL;
+	}
 
 	if (prev_ExecutorStart)
 		prev_ExecutorStart(queryDesc, eflags);
@@ -436,7 +439,11 @@ pel_log_error(ErrorData *edata)
 
 		pel_done = true; /* prevent recursive call */
 
+#if PG_VERSION_NUM >= 140000
+		stmts = raw_parser(sql, RAW_PARSE_DEFAULT);
+#else
 		stmts = raw_parser(sql);
+#endif
 
 		if (list_length(stmts) != 1)
 			elog(ERROR, "pel_log_error(): not supported");
@@ -447,7 +454,11 @@ pel_log_error(ErrorData *edata)
 		{
 			ExecuteStmt *s = (ExecuteStmt *) stmt;
 			sql = lookupCachedPrepared(s->name);
+#if PG_VERSION_NUM >= 140000
+			stmts = raw_parser(sql, RAW_PARSE_DEFAULT);
+#else
 			stmts = raw_parser(sql);
+#endif
 
 			if (list_length(stmts) != 1)
 				elog(ERROR, "not supported");
