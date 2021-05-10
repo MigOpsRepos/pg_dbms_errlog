@@ -17,7 +17,8 @@ DATA = $(wildcard updates/*--*.sql) sql/$(EXTENSION)--$(EXTVERSION).sql
 TESTS        =  00-init  \
 		01-basic  \
 		02-upt-del \
-		03-trig-fct
+		03-trig-fct \
+		04-partition
 
 REGRESS      = $(patsubst test/sql/%.sql,%,$(TESTS))
 REGRESS_OPTS = --inputdir=test

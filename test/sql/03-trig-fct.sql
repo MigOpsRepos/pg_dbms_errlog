@@ -64,4 +64,4 @@ DROP TABLE testerrlog."errTable";
 DROP TRIGGER t1_insert ON t1;
 DROP FUNCTION trig_fct;
 DROP TABLE t2;
-
+DROP TABLE t1;
