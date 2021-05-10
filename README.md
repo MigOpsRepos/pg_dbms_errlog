@@ -329,7 +329,7 @@ $dbh->do("CREATE EXTENSION pg_background");
 $dbh->do("CREATE EXTENSION pg_dbms_errlog");
 $dbh->do("LOAD 'pg_dbms_errlog'");
 $dbh->do("SET pg_dbms_errlog.synchronous = on;");
-$dbh->do("CREATE TABLE t1 (a bigint)");
+$dbh->do("CREATE TABLE t1 (a bigint PRIMARY KEY, lbl text)");
 $dbh->do("CALL dbms_errlog.create_error_log('t1');");
 $dbh->do("SET pg_dbms_errlog.query_tag TO 'daily_load'");
 $dbh->do("SET pg_dbms_errlog.reject_limit TO 25");
@@ -341,14 +341,15 @@ print "---------------------------------------------\n";
 for (my $i = 0; $i <= 10; $i++)
 {
 	$dbh->do("SAVEPOINT aze");
-	my $sth = $dbh->prepare("INSERT INTO t1 VALUES (?)");
+	my $sth = $dbh->prepare("INSERT INTO t1 VALUES (?, ?)");
 	if (not defined $sth) {
 		#print STDERR "PREPARE ERROR: " . $dbh->errstr . "\n";
 		next;
 	}
+	# Generate a duplicate key each two row inserted
 	my $val = $i;
-	$val .= 'ab-sz' if ($i % 2 != 0);
-	unless ($sth->execute($val)) {
+	$val = $i-1 if ($i % 2 != 0);
+	unless ($sth->execute($val, 'insert '.$i)) {
 		#print STDERR "EXECUTE ERROR: " . $dbh->errstr . "\n";
 		$dbh->do("ROLLBACK TO aze");
 	}

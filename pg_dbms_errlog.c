@@ -88,6 +88,7 @@ bool pel_no_client_error = true;
 /* global variable used to store DML table name */
 char *current_dml_table = NULL;
 char current_dml_kind = '\0';
+char *current_bind_parameters = NULL;
 
 /* cache to store query of prepared stamement */
 struct HTAB *PreparedCache = NULL;
@@ -386,6 +387,9 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			current_dml_kind = '?';
 	}
 
+	if (queryDesc->params && queryDesc->params->numParams > 0)
+		current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, log_parameter_max_length);
+
 	if (prev_ExecutorStart)
 		prev_ExecutorStart(queryDesc, eflags);
 	else
@@ -518,6 +522,8 @@ pel_log_error(ErrorData *edata)
 			/* generate the full error message to log */
 			initStringInfo(&msg);
 			generate_error_message(edata, &msg);
+			if (current_bind_parameters && current_bind_parameters[0] != '\0')
+				appendStringInfo(&msg, "PARAMETERS: %s", current_bind_parameters);
 
 			/*
 			 * Append the error to the log table
