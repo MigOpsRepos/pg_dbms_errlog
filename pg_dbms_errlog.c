@@ -301,29 +301,6 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 		DeallocateStmt *stmt = (DeallocateStmt *) parsetree;
 		removeCachedPrepared(stmt->name);
 	}
-	else if (IsA(parsetree, DropStmt))
-	{
-		DropStmt *drop = (DropStmt *) parsetree;
-		if (drop->removeType == OBJECT_TABLE)
-		{
-			ListCell   *cell;
-
-			foreach(cell, drop->objects)
-			{
-				LOCKMODE   lockmode = AccessExclusiveLock;
-				RangeVar   *rel = makeRangeVarFromNameList((List *) lfirst(cell));
-				Oid        relOid;
-
-				relOid = RangeVarGetRelid(rel, lockmode, RVR_MISSING_OK);
-				if (!OidIsValid(relOid))
-					continue;
-
-				elog(DEBUG1, "looking if table %s is a logging error table", get_rel_name(relOid));
-				pel_unregister_errlog_table(relOid);
-			}
-		}
-
-	}
 
 	/* Excecute the utility command, we are not concerned */
 	if (prev_ProcessUtility)
