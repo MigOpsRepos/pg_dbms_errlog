@@ -11,6 +11,10 @@
 #include "access/heapam.h"
 #if PG_VERSION_NUM >= 130000
 #include "access/table.h"
+#else
+/* for imported functions */
+#include "access/xact.h"
+#include "mb/pg_wchar.h"
 #endif
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
@@ -107,6 +111,14 @@ void pel_unregister_errlog_table(Oid relid);
 char *get_relation_name(Oid relid);
 void generate_error_message (ErrorData *edata, StringInfoData *buf);
 void append_with_tabs(StringInfo buf, const char *str);
+#if PG_VERSION_NUM < 130000
+/* Copied from src/backend/nodes/params.c for older versions */
+char *BuildParamLogString(ParamListInfo params, char **knownTextValues, int maxlen);
+/* Copied from src/backend/utils/mb/stringinfo_mb.c */
+void appendStringInfoStringQuoted(StringInfo str, const char *s, int maxlen);
+/* Copied from src/backend/access/transam/xact.c */
+bool IsAbortedTransactionBlockState(void);
+#endif
 
 typedef struct PreparedCacheKey
 {
@@ -388,7 +400,9 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	}
 
 	if (queryDesc->params && queryDesc->params->numParams > 0)
-		current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, log_parameter_max_length);
+		current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, -1);
+	else
+		current_bind_parameters = NULL;
 
 	if (prev_ExecutorStart)
 		prev_ExecutorStart(queryDesc, eflags);
@@ -641,3 +655,146 @@ generate_error_message (ErrorData *edata, StringInfoData *buf)
         }
 }
 
+#if PG_VERSION_NUM < 130000
+/*
+ * BuildParamLogString
+ *              Return a string that represents the parameter list, for logging.
+ *
+ * If caller already knows textual representations for some parameters, it can
+ * pass an array of exactly params->numParams values as knownTextValues, which
+ * can contain NULLs for any unknown individual values.  NULL can be given if
+ * no parameters are known.
+ *
+ * If maxlen is >= 0, that's the maximum number of bytes of any one
+ * parameter value to be printed; an ellipsis is added if the string is
+ * longer.  (Added quotes are not considered in this calculation.)
+ */
+char *
+BuildParamLogString(ParamListInfo params, char **knownTextValues, int maxlen)
+{
+	MemoryContext tmpCxt,
+				oldCxt;
+	StringInfoData buf;
+
+	/*
+	 * NB: think not of returning params->paramValuesStr!  It may have been
+	 * generated with a different maxlen, and so be unsuitable.  Besides that,
+	 * this is the function used to create that string.
+	 */
+
+	/*
+	 * No work if the param fetch hook is in use.  Also, it's not possible to
+	 * do this in an aborted transaction.  (It might be possible to improve on
+	 * this last point when some knownTextValues exist, but it seems tricky.)
+	 */
+	if (params->paramFetch != NULL ||
+		IsAbortedTransactionBlockState())
+		return NULL;
+
+	/* Initialize the output stringinfo, in caller's memory context */
+	initStringInfo(&buf);
+
+	/* Use a temporary context to call output functions, just in case */
+	tmpCxt = AllocSetContextCreate(CurrentMemoryContext,
+								   "BuildParamLogString",
+								   ALLOCSET_DEFAULT_SIZES);
+	oldCxt = MemoryContextSwitchTo(tmpCxt);
+
+	for (int paramno = 0; paramno < params->numParams; paramno++)
+	{
+		ParamExternData *param = &params->params[paramno];
+
+		appendStringInfo(&buf,
+						 "%s$%d = ",
+						 paramno > 0 ? ", " : "",
+						 paramno + 1);
+
+		if (param->isnull || !OidIsValid(param->ptype))
+			appendStringInfoString(&buf, "NULL");
+		else
+		{
+			if (knownTextValues != NULL && knownTextValues[paramno] != NULL)
+				appendStringInfoStringQuoted(&buf, knownTextValues[paramno],
+											 maxlen);
+			else
+			{
+				Oid                     typoutput;
+				bool            typisvarlena;
+				char       *pstring;
+
+				getTypeOutputInfo(param->ptype, &typoutput, &typisvarlena);
+				pstring = OidOutputFunctionCall(typoutput, param->value);
+				appendStringInfoStringQuoted(&buf, pstring, maxlen);
+			}
+		}
+	}
+
+	MemoryContextSwitchTo(oldCxt);
+	MemoryContextDelete(tmpCxt);
+
+	return buf.data;
+}
+
+/*
+ * appendStringInfoStringQuoted
+ *
+ * Append up to maxlen bytes from s to str, or the whole input string if
+ * maxlen < 0, adding single quotes around it and doubling all single quotes.
+ * Add an ellipsis if the copy is incomplete.
+ */
+void
+appendStringInfoStringQuoted(StringInfo str, const char *s, int maxlen)
+{
+	char       *copy = NULL;
+	const char *chunk_search_start,
+			   *chunk_copy_start,
+			   *chunk_end;
+	int                     slen;
+	bool            ellipsis;
+
+	Assert(str != NULL);
+
+
+	slen = strlen(s);
+	if (maxlen >= 0 && maxlen < slen)
+	{
+		int                     finallen = pg_mbcliplen(s, slen, maxlen);
+
+		copy = pnstrdup(s, finallen);
+		chunk_search_start = copy;
+		chunk_copy_start = copy;
+
+		ellipsis = true;
+	}
+	else
+	{
+		chunk_search_start = s;
+		chunk_copy_start = s;
+
+		ellipsis = false;
+	}
+
+	appendStringInfoCharMacro(str, '\'');
+
+	while ((chunk_end = strchr(chunk_search_start, '\'')) != NULL)
+	{
+		/* copy including the found delimiting ' */
+		appendBinaryStringInfoNT(str,
+								 chunk_copy_start,
+								 chunk_end - chunk_copy_start + 1);
+
+		/* in order to double it, include this ' into the next chunk as well */
+		chunk_copy_start = chunk_end;
+		chunk_search_start = chunk_end + 1;
+	}
+
+	/* copy the last chunk and terminate */
+	if (ellipsis)
+		appendStringInfo(str, "%s...'", chunk_copy_start);
+	else
+		appendStringInfo(str, "%s'", chunk_copy_start);
+
+	if (copy)
+		pfree(copy);
+}
+#endif
