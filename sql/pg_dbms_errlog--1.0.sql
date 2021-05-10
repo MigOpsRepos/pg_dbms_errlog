@@ -43,6 +43,9 @@ DECLARE
     fqdn_pos int := 0;
     err_log_tbname name := $2;
 BEGIN
+    IF dml_table_name IS NULL THEN
+	RAISE EXCEPTION 'You must specify a DML table name.';
+    END IF;
     IF err_log_table_name IS NULL THEN
 	fqdn_pos := position('.' IN dml_table_name) + 1;
 	err_log_tbname := '"ERR$_'||substring(dml_table_name FROM fqdn_pos FOR 58)||'"';
