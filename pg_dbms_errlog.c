@@ -631,25 +631,41 @@ pel_log_error(ErrorData *edata)
 
 			rc = SPI_connect();
 			if (rc != SPI_OK_CONNECT)
-				ereport(ERROR, (errmsg("Can not connect to SPI manager to retrieve error log table for \"%s\", rc=%d. ", rv->relname, rc)));
+			{
+				ereport(ERROR,
+						(errmsg("Can not connect to SPI manager to retrieve"
+								" error log table for \"%s\", rc=%d. ",
+								rv->relname, rc)));
+			}
+
 			appendStringInfo(&relstmt, "SELECT concat(quote_ident(n.nspname), '.', quote_ident(c.relname))::text FROM %s.register_errlog_tables e JOIN pg_catalog.pg_class c ON (c.oid = e.relerrlog) JOIN pg_namespace n ON (c.relnamespace=n.oid) WHERE e.reldml = %u", PEL_NAMESPACE_NAME, relid);
+
 			rc = SPI_exec(relstmt.data, 0);
 			if (rc != SPI_OK_SELECT || SPI_processed != 1)
-				ereport(ERROR, (errmsg("SPI execution failure (rc=%d) on query: %s",
-										rc, relstmt.data)));
+			{
+				ereport(ERROR,
+						(errmsg("SPI execution failure (rc=%d) on query: %s",
+								rc, relstmt.data)));
+			}
+
 			logtable = TextDatumGetCString(SPI_getbinval(SPI_tuptable->vals[0],
 										SPI_tuptable->tupdesc,
 										1,
 										&isnull));
 			if (isnull)
-				ereport(ERROR, (errmsg("can not get error logging table for table %s", relstmt.data)));
+			{
+				ereport(ERROR,
+						(errmsg("can not get error logging table for table %s",
+						 relstmt.data)));
+			}
 
 			/* generate the full error message to log */
 			initStringInfo(&msg);
 			generate_error_message(edata, &msg);
 			if (current_bind_parameters && current_bind_parameters[0] != '\0')
 			{
-				appendStringInfo(&msg, "PARAMETERS: %s", current_bind_parameters);
+				appendStringInfo(&msg, "PARAMETERS: %s",
+								 current_bind_parameters);
 
 				pfree(current_bind_parameters);
 				current_bind_parameters = NULL;
