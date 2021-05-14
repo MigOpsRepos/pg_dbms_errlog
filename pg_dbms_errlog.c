@@ -18,6 +18,7 @@
 #endif
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_namespace.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
@@ -33,6 +34,7 @@
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
+#include "utils/regproc.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -626,8 +628,22 @@ pel_log_error(ErrorData *edata)
 			char *logtable;
 			int  finished = 0;
 			bool isnull;
+			bool need_priv_escalation = !superuser(); /* we might be a SU */
+			Oid  save_userid;
+			int  save_sec_context;
 
 			initStringInfo(&relstmt);
+
+			/* Inserting error to log table must be created as SU */
+			if (need_priv_escalation)
+			{
+				/* Get current user's Oid and security context */
+				GetUserIdAndSecContext(&save_userid, &save_sec_context);
+				/* Become superuser */
+				SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, save_sec_context
+									| SECURITY_LOCAL_USERID_CHANGE
+									| SECURITY_RESTRICTED_OPERATION);
+			}
 
 			rc = SPI_connect();
 			if (rc != SPI_OK_CONNECT)
@@ -693,6 +709,10 @@ pel_log_error(ErrorData *edata)
 			finished = SPI_finish();
 			if (finished != SPI_OK_FINISH)
 				ereport(ERROR, (errmsg("could not disconnect from SPI manager")));
+
+			/* Restore user's privileges */
+			if (need_priv_escalation)
+				SetUserIdAndSecContext(save_userid, save_sec_context);
 
 			elog(DEBUG1, "pel_log_error(): ERRCODE: %s;KIND: %c,TAG: %s;MESSAGE: %s;QUERY: %s;TABLE: %s; INFO: %s",
 								unpack_sql_state(edata->sqlerrcode),

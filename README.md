@@ -152,6 +152,9 @@ gilles=# \d "ERRORS"."ERR$_EMPTABLE"
  pg_err_detail$ | text         |                 |           |
 ```
 
+You must be superuser to call the `dbms_errlog.create_error_log()` procedure
+or have all privilege on table `dbms_errlog.register_errlog_tables`.
+
 ### [Limitations](#limitation)
 
 As explain above the pg_dbms_errlog extension copy the failing DML query into
@@ -162,9 +165,9 @@ Expect changes on this part in further version, having a dedicated log column
 per column's data to give the exact same behavior as Oracle implementation.
 
 The form `INSERT INTO <tablename> SELECT ...` will not have the same behavior
-than in Oracle. It will not stored the succesfull insert and looged the rows
+than in Oracle. It will not store the succesfull inserts and looged the rows
 in error. This is not supported because it is a single transaction for PostgreSQL
-and everything is rollbacked in case of error. But the erro
+and everything is rollbacked in case of error. Same for INSERT with multivalues.
 
 
 ### [Which errors are logged](#which-errors-are-logged)?

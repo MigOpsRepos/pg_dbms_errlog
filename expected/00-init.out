@@ -8,3 +8,7 @@ CREATE EXTENSION pg_background;
 CREATE EXTENSION pg_dbms_errlog;
 -- Create the test table
 CREATE TABLE IF NOT EXISTS t1 (a bigint PRIMARY KEY);
+-- Create a basic user to test privileges
+DROP ROLE IF EXISTS pel_u1;
+NOTICE:  role "pel_u1" does not exist, skipping
+CREATE ROLE pel_u1 LOGIN;
