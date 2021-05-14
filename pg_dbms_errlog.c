@@ -106,7 +106,6 @@ struct HTAB *PreparedCache = NULL;
 /* Functions declaration */
 void        _PG_init(void);
 void        _PG_fini(void);
-void        exitHook(int code, Datum arg);
 static void pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO);
 static void pel_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void pel_ExecutorRun(QueryDesc *queryDesc,
