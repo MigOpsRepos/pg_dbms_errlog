@@ -48,7 +48,8 @@ ROLLBACK TO aze;
 ROLLBACK;
 -- Looking at error logging table
 \x
-SELECT * FROM testerrlog."errTable";
+SELECT * FROM testerrlog."errTable"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 -[ RECORD 1 ]--+-------------------------------------------------------------
 pg_err_number$ | 42703
 pg_err_mesg$   | record "new" has no field "id"

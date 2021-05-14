@@ -18,7 +18,8 @@ BEGIN;
 SAVEPOINT aze;
 INSERT INTO t1 VALUES ('10.4');
 ROLLBACK TO aze;
-SELECT * FROM "ERR$_t1";
+SELECT * FROM "ERR$_t1"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
  pg_err_number$ |                 pg_err_mesg$                 | pg_err_optyp$ | pg_err_tag$ |          pg_err_query$          |                               pg_err_detail$                                
 ----------------+----------------------------------------------+---------------+-------------+---------------------------------+-----------------------------------------------------------------------------
  22P02          | invalid input syntax for type bigint: "10.4" | I             | daily_load  | INSERT INTO t1 VALUES ('10.4'); | ERROR:  22P02: invalid input syntax for type bigint: "10.4" at character 24+
@@ -32,7 +33,8 @@ INSERT INTO t1 VALUES (1);
 SAVEPOINT aze;
 INSERT INTO t1 VALUES (1);
 ROLLBACK TO aze;
-SELECT * FROM "ERR$_t1";
+SELECT * FROM "ERR$_t1"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
  pg_err_number$ |                       pg_err_mesg$                       | pg_err_optyp$ | pg_err_tag$ |          pg_err_query$          |                               pg_err_detail$                                
 ----------------+----------------------------------------------------------+---------------+-------------+---------------------------------+-----------------------------------------------------------------------------
  22P02          | invalid input syntax for type bigint: "10.4"             | I             | daily_load  | INSERT INTO t1 VALUES ('10.4'); | ERROR:  22P02: invalid input syntax for type bigint: "10.4" at character 24+
@@ -57,7 +59,8 @@ DEALLOCATE prep_insert;
 ROLLBACK;
 -- Looking at error logging table
 \x
-SELECT * FROM "ERR$_t1";
+SELECT * FROM "ERR$_t1"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 -[ RECORD 1 ]--+----------------------------------------------------------------------------
 pg_err_number$ | 22P02
 pg_err_mesg$   | invalid input syntax for type bigint: "10.4"
@@ -68,6 +71,15 @@ pg_err_detail$ | ERROR:  22P02: invalid input syntax for type bigint: "10.4" at 
                | STATEMENT:  INSERT INTO t1 VALUES ('10.4');                                +
                | 
 -[ RECORD 2 ]--+----------------------------------------------------------------------------
+pg_err_number$ | 22P02
+pg_err_mesg$   | invalid input syntax for type bigint: "10.5"
+pg_err_optyp$  | I
+pg_err_tag$    | daily_load
+pg_err_query$  | PREPARE prep_insert AS INSERT INTO t1 VALUES ($1);
+pg_err_detail$ | ERROR:  22P02: invalid input syntax for type bigint: "10.5" at character 21+
+               | STATEMENT:  EXECUTE prep_insert('10.5');                                   +
+               | 
+-[ RECORD 3 ]--+----------------------------------------------------------------------------
 pg_err_number$ | 23505
 pg_err_mesg$   | duplicate key value violates unique constraint "t1_pkey"
 pg_err_optyp$  | I
@@ -76,15 +88,6 @@ pg_err_query$  | INSERT INTO t1 VALUES (1);
 pg_err_detail$ | ERROR:  23505: duplicate key value violates unique constraint "t1_pkey"    +
                | DETAIL:  Key (a)=(1) already exists.                                       +
                | STATEMENT:  INSERT INTO t1 VALUES (1);                                     +
-               | 
--[ RECORD 3 ]--+----------------------------------------------------------------------------
-pg_err_number$ | 22P02
-pg_err_mesg$   | invalid input syntax for type bigint: "10.5"
-pg_err_optyp$  | I
-pg_err_tag$    | daily_load
-pg_err_query$  | PREPARE prep_insert AS INSERT INTO t1 VALUES ($1);
-pg_err_detail$ | ERROR:  22P02: invalid input syntax for type bigint: "10.5" at character 21+
-               | STATEMENT:  EXECUTE prep_insert('10.5');                                   +
                | 
 
 \x
