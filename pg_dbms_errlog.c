@@ -77,6 +77,9 @@ PG_MODULE_MAGIC;
 /* Saved hook values in case of unload */
 static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
+static ExecutorRun_hook_type prev_ExecutorRun = NULL;
+static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
+static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static emit_log_hook_type prev_emit_log_hook = NULL;
 static post_parse_analyze_hook_type prev_post_parse_analyze_hook = NULL;
 
@@ -94,6 +97,9 @@ char *current_dml_table = NULL;
 char current_dml_kind = '\0';
 char *current_bind_parameters = NULL;
 
+/* Current nesting depth of ExecutorRun calls */
+static int	exec_nested_level = 0;
+
 /* cache to store query of prepared stamement */
 struct HTAB *PreparedCache = NULL;
 
@@ -103,6 +109,11 @@ void        _PG_fini(void);
 void        exitHook(int code, Datum arg);
 static void pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO);
 static void pel_ExecutorStart(QueryDesc *queryDesc, int eflags);
+static void pel_ExecutorRun(QueryDesc *queryDesc,
+							ScanDirection direction,
+							uint64 count, bool execute_once);
+static void pel_ExecutorFinish(QueryDesc *queryDesc);
+static void pel_ExecutorEnd(QueryDesc *queryDesc);
 static void pel_log_error(ErrorData *edata);
 char *lookupCachedPrepared(const char *preparedName);
 void removeCachedPrepared(const char *localPreparedName);
@@ -280,6 +291,12 @@ _PG_init(void)
 	ProcessUtility_hook = pel_ProcessUtility;
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = pel_ExecutorStart;
+	prev_ExecutorRun = ExecutorRun_hook;
+	ExecutorRun_hook = pel_ExecutorRun;
+	prev_ExecutorFinish = ExecutorFinish_hook;
+	ExecutorFinish_hook = pel_ExecutorFinish;
+	prev_ExecutorEnd = ExecutorEnd_hook;
+	ExecutorEnd_hook = pel_ExecutorEnd;
 	prev_emit_log_hook = emit_log_hook;
 	emit_log_hook = pel_log_error;
 	prev_post_parse_analyze_hook = post_parse_analyze_hook;
@@ -295,6 +312,9 @@ _PG_fini(void)
 	/* Uninstall hooks */
 	ProcessUtility_hook = prev_ProcessUtility;
 	ExecutorStart_hook = prev_ExecutorStart;
+	ExecutorRun_hook = prev_ExecutorRun;
+	ExecutorFinish_hook = prev_ExecutorFinish;
+	ExecutorEnd_hook = prev_ExecutorEnd;
 	emit_log_hook = prev_emit_log_hook;
 	post_parse_analyze_hook = prev_post_parse_analyze_hook;
 }
@@ -399,6 +419,15 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			current_dml_kind = '?';
 	}
 
+	if (exec_nested_level == 0)
+	{
+		if (current_bind_parameters != NULL)
+		{
+			pfree(current_bind_parameters);
+			current_bind_parameters = NULL;
+		}
+	}
+
 	if (!pel_done)
 	{
 		if (queryDesc->params && queryDesc->params->numParams > 0)
@@ -411,6 +440,70 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		prev_ExecutorStart(queryDesc, eflags);
 	else
 		standard_ExecutorStart(queryDesc, eflags);
+}
+
+/*
+ * ExecutorRun hook: all we need do is track nesting depth
+ */
+static void
+pel_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
+				 bool execute_once)
+{
+	exec_nested_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorRun)
+			prev_ExecutorRun(queryDesc, direction, count, execute_once);
+		else
+			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+	}
+	PG_FINALLY();
+	{
+		exec_nested_level--;
+	}
+	PG_END_TRY();
+}
+
+/*
+ * ExecutorFinish hook: all we need do is track nesting depth
+ */
+static void
+pel_ExecutorFinish(QueryDesc *queryDesc)
+{
+	exec_nested_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorFinish)
+			prev_ExecutorFinish(queryDesc);
+		else
+			standard_ExecutorFinish(queryDesc);
+	}
+	PG_FINALLY();
+	{
+		exec_nested_level--;
+	}
+	PG_END_TRY();
+}
+
+/*
+ * ExecutorEnd hook: done required cleanup
+ */
+static void
+pel_ExecutorEnd(QueryDesc *queryDesc)
+{
+	if (exec_nested_level == 0)
+	{
+		if (current_bind_parameters != NULL)
+		{
+			pfree(current_bind_parameters);
+			current_bind_parameters = NULL;
+		}
+	}
+
+	if (prev_ExecutorEnd)
+		prev_ExecutorEnd(queryDesc);
+	else
+		standard_ExecutorEnd(queryDesc);
 }
 
 /*
@@ -428,6 +521,7 @@ pel_log_error(ErrorData *edata)
 
 	if (!pel_done)
 	{
+		MemoryContext pelcontext, oldcontext;
 		List *stmts;
 		RawStmt *raw;
 		Node    *stmt;
@@ -439,11 +533,18 @@ pel_log_error(ErrorData *edata)
 
 		pel_done = true; /* prevent recursive call */
 
+		pelcontext = AllocSetContextCreate(CurTransactionContext,
+								 "PEL temporary context",
+								 ALLOCSET_DEFAULT_SIZES);
+		oldcontext = MemoryContextSwitchTo(pelcontext);
 #if PG_VERSION_NUM >= 140000
 		stmts = raw_parser(sql, RAW_PARSE_DEFAULT);
 #else
 		stmts = raw_parser(sql);
 #endif
+		MemoryContextSwitchTo(oldcontext);
+		stmts = list_copy_deep(stmts);
+		MemoryContextDelete(pelcontext);
 
 		if (list_length(stmts) != 1)
 			elog(ERROR, "pel_log_error(): not supported");
@@ -548,7 +649,12 @@ pel_log_error(ErrorData *edata)
 			initStringInfo(&msg);
 			generate_error_message(edata, &msg);
 			if (current_bind_parameters && current_bind_parameters[0] != '\0')
+			{
 				appendStringInfo(&msg, "PARAMETERS: %s", current_bind_parameters);
+
+				pfree(current_bind_parameters);
+				current_bind_parameters = NULL;
+			}
 
 			/*
 			 * Append the error to the log table
