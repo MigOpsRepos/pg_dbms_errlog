@@ -16,14 +16,16 @@ BEGIN;
 SAVEPOINT aze;
 INSERT INTO t1 VALUES ('10.4');
 ROLLBACK TO aze;
-SELECT * FROM "ERR$_t1";
+SELECT * FROM "ERR$_t1"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 -- Insert successful
 INSERT INTO t1 VALUES (1);
 -- Insert will fail on duplicate key
 SAVEPOINT aze;
 INSERT INTO t1 VALUES (1);
 ROLLBACK TO aze;
-SELECT * FROM "ERR$_t1";
+SELECT * FROM "ERR$_t1"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 PREPARE prep_insert AS INSERT INTO t1 VALUES ($1);
 -- Insert successful
 SAVEPOINT aze;
@@ -38,7 +40,8 @@ ROLLBACK;
 
 -- Looking at error logging table
 \x
-SELECT * FROM "ERR$_t1";
+SELECT * FROM "ERR$_t1"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 \x
 
 -- Dropping one of the table

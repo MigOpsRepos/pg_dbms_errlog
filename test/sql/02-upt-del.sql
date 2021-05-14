@@ -19,7 +19,8 @@ INSERT INTO t1 VALUES (3);
 SAVEPOINT aze;
 DELETE FROM t1 WHERE a = '10.6';
 ROLLBACK TO aze;
-SELECT * FROM testerrlog."errTable";
+SELECT * FROM testerrlog."errTable"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 -- Update will fail but at parser level, it must not be logged
 SAVEPOINT aze;
 UPDATE t1 SET a = '10.7'::varchar interval WHERE a = 1;
@@ -41,7 +42,8 @@ ROLLBACK;
 
 -- Looking at error logging table
 \x
-SELECT * FROM testerrlog."errTable";
+SELECT * FROM testerrlog."errTable"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 \x
 
 -- Dropping one of the table

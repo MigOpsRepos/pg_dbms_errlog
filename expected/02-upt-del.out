@@ -21,7 +21,8 @@ INSERT INTO t1 VALUES (3);
 SAVEPOINT aze;
 DELETE FROM t1 WHERE a = '10.6';
 ROLLBACK TO aze;
-SELECT * FROM testerrlog."errTable";
+SELECT * FROM testerrlog."errTable"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
  pg_err_number$ |                 pg_err_mesg$                 | pg_err_optyp$ | pg_err_tag$ |          pg_err_query$           |                               pg_err_detail$                                
 ----------------+----------------------------------------------+---------------+-------------+----------------------------------+-----------------------------------------------------------------------------
  22P02          | invalid input syntax for type bigint: "10.6" | D             | daily_load  | DELETE FROM t1 WHERE a = '10.6'; | ERROR:  22P02: invalid input syntax for type bigint: "10.6" at character 26+
@@ -52,7 +53,8 @@ DEALLOCATE prep_update;
 ROLLBACK;
 -- Looking at error logging table
 \x
-SELECT * FROM testerrlog."errTable";
+SELECT * FROM testerrlog."errTable"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 -[ RECORD 1 ]--+----------------------------------------------------------------------------
 pg_err_number$ | 22P02
 pg_err_mesg$   | invalid input syntax for type bigint: "10.6"
