@@ -515,12 +515,11 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 				/* no way to tell, assume commit did happen */
 				is_commit = true;
 			}
-			else if (qc->commandTag == CMDTAG_ROLLBACK)
-				is_commit = false;
-			else
+			else if (qc->commandTag != CMDTAG_ROLLBACK)
 				is_commit = true;
 #else
-			is_commit == (strcmp(completionTag) == "COMMIT");
+			if (strcmp(completionTag, "COMMIT") == 0)
+				is_commit = true;
 #endif
 
 			if (is_commit)
@@ -651,7 +650,11 @@ pel_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
 		else
 			standard_ExecutorRun(queryDesc, direction, count, execute_once);
 	}
+#if PG_VERSION_NUM >= 130000
 	PG_FINALLY();
+#else
+	PG_CATCH();
+#endif
 	{
 		exec_nested_level--;
 	}
@@ -672,7 +675,11 @@ pel_ExecutorFinish(QueryDesc *queryDesc)
 		else
 			standard_ExecutorFinish(queryDesc);
 	}
+#if PG_VERSION_NUM >= 130000
 	PG_FINALLY();
+#else
+	PG_CATCH();
+#endif
 	{
 		exec_nested_level--;
 	}
@@ -741,7 +748,11 @@ pel_log_error(ErrorData *edata)
 		stmts = raw_parser(sql);
 #endif
 		MemoryContextSwitchTo(oldcontext);
+#if PG_VERSION_NUM >= 130000
 		stmts = list_copy_deep(stmts);
+#else
+		stmts = list_copy(stmts);
+#endif
 		MemoryContextDelete(pelcontext);
 
 		if (list_length(stmts) != 1)

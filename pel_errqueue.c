@@ -343,10 +343,14 @@ pel_publish_queue(bool sync)
 		 * return immediately.
 		 */
 		if (local_data.last_pos < 0 || !sync)
+		{
+			elog(DEBUG1, "pel_publish_queue(): no queued work or async mode (%d)", sync);
 			return PEL_PUBLISH_EMPTY;
+		}
 
 		/* Restore the last known queue entry position */
 		pos = local_data.last_pos;
+		elog(DEBUG1, "pel_publish_queue(): restore the last known queue entry position %d", pos);
 		LWLockAcquire(pel->lock, LW_EXCLUSIVE);
 		/*
 		 * Check if the entry in that position is still ours.  If yes, ask to
@@ -412,6 +416,7 @@ pel_publish_queue(bool sync)
 	pel_cleanup_local();
 
 wait_for_bgworker:
+	elog(DEBUG1, "pel_publish_queue(): wait_for_bgworker, sync: %d", sync);
 	Assert(!LWLockHeldByMe(pel->lock));
 
 	if (sync == true)
@@ -435,6 +440,7 @@ wait_for_bgworker:
 			else
 				CHECK_FOR_INTERRUPTS();
 
+			elog(DEBUG1, "pel_publish_queue(): WaitLatch for %d", sleep_time);
 			WaitLatch(&MyProc->procLatch,
 					WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 					sleep_time,
@@ -452,6 +458,7 @@ wait_for_bgworker:
 		/*
 		 * And sleep until the launched dynamic bgworker wakes us.
 		 */
+		elog(DEBUG1, "pel_publish_queue(): sleep until the launched dynamic bgworker wakes us");
 		processed = false;
 		while (!processed)
 		{
@@ -492,6 +499,7 @@ wait_for_bgworker:
 			 * possible the system consumed the whole queue entries and the
 			 * entry at the given position now belongs to another backend.
 			 */
+			elog(DEBUG1, "pel_publish_queue(): Checking if item at pos %d is processed %d (queue.pgprocno: %d / MyProc->pgprocno: %d.", pos, queue.entries[pos].processed, queue.entries[pos].pgprocno, MyProc->pgprocno);
 			processed = (queue.entries[pos].processed ||
 					queue.entries[pos].pgprocno != MyProc->pgprocno);
 			LWLockRelease(pel->lock);
@@ -499,12 +507,15 @@ wait_for_bgworker:
 			/* There won't be any need to check for that entry anymore */
 			if (processed)
 				local_data.last_pos = -1;
+
+			elog(DEBUG1, "pel_publish_queue(): queue entry %d processed last_pos = %d", pos, local_data.last_pos);
 		}
 	}
 
 	return pos;
 
 error:
+	elog(DEBUG1, "pel_publish_queue(): error, returning invalid pos %d", PEL_PUBLISH_ERROR);
 	local_data.last_pos = -1;
 	return PEL_PUBLISH_ERROR;
 }
@@ -532,6 +543,7 @@ pel_worker_entry_complete(void)
 	Assert(!LWLockHeldByMe(pel->lock));
 	Assert(local_data.pos >= 0);
 
+	elog(DEBUG1, "pel_worker_entry_complete(): Mark the entry as processed");
 	LWLockAcquire(pel->lock, LW_EXCLUSIVE);
 
 	/* Mark the entry as processed */
@@ -542,6 +554,7 @@ pel_worker_entry_complete(void)
 		pgprocno = INVALID_PGPROCNO;
 	LWLockRelease(pel->lock);
 
+	elog(DEBUG1, "pel_worker_entry_complete(): notify caller %d if it was required after releasing pel->lock", pgprocno);
 	/* Notify caller if it was required after releasing pel->lock */
 	if (pgprocno != INVALID_PGPROCNO)
 		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
@@ -704,6 +717,8 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 			DSA_ALLOC_NO_OOM);
 	if (error->perrmessage == InvalidDsaPointer)
 	{
+		elog(WARNING, "pel_queue_error(): can not extend queue for %ld bytes, errmsg: %s",
+									len+1, errmessage);
 		pel_cleanup_local();
 		return false;
 	}
@@ -720,6 +735,8 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 				DSA_ALLOC_NO_OOM);
 		if (error->pquery_tag == InvalidDsaPointer)
 		{
+			elog(WARNING, "pel_queue_error(): can not extend queue for %ld bytes, query_tag: %s",
+									len+1, errmessage);
 			pel_cleanup_local();
 			return false;
 		}
@@ -735,6 +752,8 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 			DSA_ALLOC_NO_OOM);
 	if (error->psql == InvalidDsaPointer)
 	{
+		elog(WARNING, "pel_queue_error(): can not extend queue for %ld bytes, query: %s",
+									len+1, errmessage);
 		pel_cleanup_local();
 		return false;
 	}
@@ -749,6 +768,8 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 				DSA_ALLOC_NO_OOM);
 		if (error->pdetail == InvalidDsaPointer)
 		{
+			elog(WARNING, "pel_queue_error(): can not extend queue for %ld bytes, detail: %s",
+									len+1, errmessage);
 			pel_cleanup_local();
 			return false;
 		}
@@ -765,6 +786,7 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 	if (sync)
 	{
 		int pos = pel_publish_queue(true);
+		elog(DEBUG1, "pel_queue_error(): queue position returned by pel_publish_queue(): %d", pos);
 
 		if (pos == PEL_PUBLISH_ERROR)
 		{

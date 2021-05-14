@@ -18,6 +18,7 @@
 #include "commands/dbcommands.h"
 #include "executor/spi.h"
 #include "fmgr.h"
+#include "miscadmin.h"
 #if PG_VERSION_NUM < 140000
 #include "pgstat.h"
 #else
@@ -326,8 +327,12 @@ pel_dynworker_main(Datum main_arg)
 	while(true)
 	{
 		Oid new_dbid;
+		int rc;
 
-		SPI_connect();
+		rc = SPI_connect();
+		if (rc != SPI_OK_CONNECT)
+			ereport(WARNING, (errmsg("Can not connect to SPI manager.")));
+
 		StartTransactionCommand();
 		SetCurrentStatementStartTimestamp();
 		PushActiveSnapshot(GetTransactionSnapshot());
@@ -355,15 +360,22 @@ pel_dynworker_main(Datum main_arg)
 					quote_literal_cstr(error->sql),
 					error->detail ? quote_literal_cstr(error->detail) : "NULL"
 					);
-
 			pgstat_report_activity(STATE_RUNNING, sql.data);
 			SPI_execute(sql.data, false, 0);
+                        if (rc != SPI_OK_INSERT)
+                        if (SPI_processed != 1)
+                                ereport(WARNING,
+						(errmsg("SPI execution failure (rc=%d) on query: %s",
+											rc, sql.data)));
+			elog(DEBUG1, "pel_dynworker_main(): inserted %ld rows", SPI_processed);
 			pgstat_report_activity(STATE_IDLE, NULL);
 
 			pfree(sql.data);
 		}
 
-		SPI_finish();
+		rc = SPI_finish();
+		if (rc != SPI_OK_FINISH)
+			elog(WARNING, "could not disconnect from SPI manager");
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 
@@ -375,6 +387,7 @@ pel_dynworker_main(Datum main_arg)
 
 		/* Move to the next item in the batch if any */
 		pos = PEL_POS_NEXT(pos);
+		elog(DEBUG1, "pel_dynworker_main(): new pos after processing %d", pos);
 
 		if (pos > limit)
 			break;
