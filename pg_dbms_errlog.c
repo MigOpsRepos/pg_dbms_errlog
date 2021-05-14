@@ -495,7 +495,7 @@ pel_log_error(ErrorData *edata)
 		{
 			/* Unhandled DML, bail out */
 			return;
-                }
+		}
 		else
 		{
 			Assert(rv != NULL);
@@ -504,25 +504,25 @@ pel_log_error(ErrorData *edata)
 
 		relid = RangeVarGetRelid(rv, AccessShareLock, true);
 
-                if (!OidIsValid(relid))
-                {
-                        if (rv->schemaname)
-                                elog(WARNING, "could not find an oid for relation \"%s\".\"%s\"",
-                                                rv->schemaname, rv->relname);
-                        else
-                                elog(WARNING, "could not find an oid for relation \"%s\"",
-                                                rv->relname);
-                        return;
-                }
+		if (!OidIsValid(relid))
+		{
+			if (rv->schemaname)
+				elog(WARNING, "could not find an oid for relation \"%s\".\"%s\"",
+						rv->schemaname, rv->relname);
+			else
+				elog(WARNING, "could not find an oid for relation \"%s\"",
+						rv->relname);
+			return;
+		}
 
-                elog(DEBUG1, "pel_log_error(): OPERATION: %s, KIND: %c, RELID: %u", operation, current_dml_kind, relid);
+		elog(DEBUG1, "pel_log_error(): OPERATION: %s, KIND: %c, RELID: %u", operation, current_dml_kind, relid);
 
-                /* Get the associated error logging table if any */
-                if (OidIsValid(relid))
-                {
-                        StringInfoData relstmt;
+		/* Get the associated error logging table if any */
+		if (OidIsValid(relid))
+		{
+			StringInfoData relstmt;
 			StringInfoData msg;
-                        int rc = 0;
+			int rc = 0;
 			char *logtable;
 			int  finished = 0;
 			bool isnull;
@@ -614,19 +614,19 @@ generate_error_message (ErrorData *edata, StringInfoData *buf)
 	appendStringInfo(buf, "%s:  ", "ERROR");
 	appendStringInfo(buf, "%s: ", unpack_sql_state(edata->sqlerrcode));
 
-        if (edata->message)
-                append_with_tabs(buf, edata->message);
-        else
-                append_with_tabs(buf, _("missing error text"));
+	if (edata->message)
+		append_with_tabs(buf, edata->message);
+	else
+		append_with_tabs(buf, _("missing error text"));
 
-        if (edata->cursorpos > 0)
-                appendStringInfo(buf, _(" at character %d"),
-                                                 edata->cursorpos);
-        else if (edata->internalpos > 0)
-                appendStringInfo(buf, _(" at character %d"),
-                                                 edata->internalpos);
+	if (edata->cursorpos > 0)
+		appendStringInfo(buf, _(" at character %d"),
+				edata->cursorpos);
+	else if (edata->internalpos > 0)
+		appendStringInfo(buf, _(" at character %d"),
+				edata->internalpos);
 
-        appendStringInfoChar(buf, '\n');
+	appendStringInfoChar(buf, '\n');
 
 	if (edata->detail_log)
 	{
@@ -658,12 +658,12 @@ generate_error_message (ErrorData *edata, StringInfoData *buf)
 		append_with_tabs(buf, edata->context);
 		appendStringInfoChar(buf, '\n');
 	}
-        if (debug_query_string != NULL)
-        {
-                appendStringInfoString(buf, _("STATEMENT:  "));
-                append_with_tabs(buf, debug_query_string);
-                appendStringInfoChar(buf, '\n');
-        }
+	if (debug_query_string != NULL)
+	{
+		appendStringInfoString(buf, _("STATEMENT:  "));
+		append_with_tabs(buf, debug_query_string);
+		appendStringInfoChar(buf, '\n');
+	}
 }
 
 #if PG_VERSION_NUM < 130000
