@@ -45,7 +45,8 @@ ROLLBACK;
 
 -- Looking at error logging table
 \x
-SELECT * FROM testerrlog."errTable";
+SELECT * FROM testerrlog."errTable"
+ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 \x
 
 -- Dropping one of the table

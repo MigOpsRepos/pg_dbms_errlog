@@ -10,7 +10,9 @@ PG_CPPFLAGS = -Wno-uninitialized
 PG_LIBDIR := $(shell $(PG_CONFIG) --libdir)
 
 DOCS = $(wildcard README*)
-MODULES = pg_dbms_errlog
+MODULE_big = pg_dbms_errlog
+
+OBJS = pg_dbms_errlog.o pel_errqueue.o pel_worker.o
 
 DATA = $(wildcard updates/*--*.sql) sql/$(EXTENSION)--$(EXTVERSION).sql
 

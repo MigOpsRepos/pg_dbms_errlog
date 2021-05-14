@@ -18,11 +18,11 @@ The pg_dbms_errlog extension provides the infrastructure that enables you to
 create an error logging table so that DML operations can continue after
 encountering errors rather than abort and roll back. It requires the use of
 the pg_statement_rollback extension or to fully manage the SAVEPOINT in the
-DML script. Logging in the corresponding error table is done using extension
-pg_background, it is required that the extension must have been created in the
-database. Note that `max_worker_processes` must be high enough to support the
-pg_dbms_errlog extension, a pg_background process can be forked in each session
-using the pg_dbms_errlog extension.
+DML script. Logging in the corresponding error table is done using dynamic
+background workers. Note that `max_worker_processes` must be high enough to
+support the pg_dbms_errlog extension, as it will launch up to
+`pg_dbms_errlog.max_workers` dynamic background workers, plus an additional
+fixed background worker.
 
 * [Installation](#installation)
 
@@ -36,6 +36,13 @@ Once `pg_config` is in your path, do
     make
     sudo make install
 
+Configure the extension in `shared_preload_libraries`.  For instance in a
+vanille **postgresql.conf**::
+
+    shared_preload_libraries = 'pg_dbms_errlog'
+
+Restart the instance.
+
 To run test execute the following command as superuser:
 
     make installcheck
@@ -46,11 +53,22 @@ To run test execute the following command as superuser:
 
 Enable/disable log of failing queries. Default disabled.
 
+- *pg_dbms_errlog.frequency*
+
+Amount of time the background worker will sleep before checking for unprocessed
+errors, which only happens if pg_dbms_errlog.synchronous is disabled. Default
+is 60s.
+
 - *pg_dbms_errlog.query_tag*
 
 Tag (a numeric or string literal in parentheses) that gets added to the error
 log to help identify the statement that caused the errors. If the tag is
 omitted, a NULL value is used.
+
+- *pg_dbms_errlog.max_workers*
+
+Number of dynamic background workers that can be launched simultaneously.  Note
+that for now it can only happen on different databases.  Default is 1.
 
 - *pg_dbms_errlog.reject_limit*
 
@@ -61,10 +79,10 @@ is logged and the statement rolls back. FIXME: not supported yet.
 
 - *pg_dbms_errlog.synchronous*
 
-Wait for pg_background error logging completion when an error happens.
-Default enabled. Asynchronous logging is discouraged as you can loose some
-error messages when the script ends unless you wait enough time at end of
-the script to wait for all asynchronous insert to be effective.
+Wait for error processing completion when an error happens or when the
+transaction ends.  Default enabled. Asynchronous logging is discouraged as you
+can loose some error messages when the script ends unless you wait enough time
+at end of the script to wait for all asynchronous insert to be effective.
 
 - *pg_dbms_errlog.no_client_error*
 
@@ -188,7 +206,6 @@ FIXME: If more than ten errors had occurred, then the statement would have
 aborted, rolling back any insertions made.
 
 ```
-CREATE EXTENSION pg_background;
 CREATE EXTENSION pg_dbms_errlog;
 LOAD 'pg_dbms_errlog';
 LOAD 'pg_statement_rollback';
@@ -325,7 +342,6 @@ die "ERROR: can't connect to database ontrib_regression\n" if (not defined $dbh)
 print "---------------------------------------------\n";
 print "Create the extension and initialize the test\n";
 print "---------------------------------------------\n";
-$dbh->do("CREATE EXTENSION pg_background");
 $dbh->do("CREATE EXTENSION pg_dbms_errlog");
 $dbh->do("LOAD 'pg_dbms_errlog'");
 $dbh->do("SET pg_dbms_errlog.synchronous = on;");

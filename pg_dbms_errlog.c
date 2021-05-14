@@ -25,6 +25,7 @@
 #include "nodes/makefuncs.h"
 #include "parser/analyze.h"
 #include "parser/parser.h"
+#include "postmaster/bgworker.h"
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
@@ -36,6 +37,14 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
+#if PG_VERSION_NUM >= 140000
+#include "utils/wait_event.h"
+#else
+#include "pgstat.h"
+#endif
+
+#include "include/pg_dbms_errlog.h"
+#include "include/pel_errqueue.h"
 
 #if PG_VERSION_NUM < 100000
 #error Minimum version of PostgreSQL required is 10
@@ -61,29 +70,36 @@
 #define PEL_PROCESSUTILITY_ARGS pstmt, queryString, context, params, queryEnv, dest, completionTag
 #endif
 
-#define PEL_NAMESPACE_NAME "dbms_errlog"
 #define PEL_REGISTRATION_TABLE "register_errlog_tables"
 #define Anum_pel_relid 1
 #define Anum_pel_errlogid 2
 
 #define MAX_PREPARED_STMT_SIZE   1048576
 
-#define PEL_ASYNC_QUERY "SELECT pg_background_launch($$INSERT INTO %s VALUES ('%s', %s, '%c', %s, %s, %s)$$);"
-#define PEL_SYNC_QUERY "SELECT * FROM pg_background_result(pg_background_launch($$INSERT INTO %s VALUES ('%s', %s, '%c', %s, %s, %s)$$)) AS (result TEXT);"
-
 
 PG_MODULE_MAGIC;
 
+#define PEL_TRANCHE_NAME		"pg_dbms_errlog"
+
 /* Saved hook values in case of unload */
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
+static ExecutorRun_hook_type prev_ExecutorRun = NULL;
+static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
+static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static emit_log_hook_type prev_emit_log_hook = NULL;
 static post_parse_analyze_hook_type prev_post_parse_analyze_hook = NULL;
 
+/* Links to shared memory state */
+pelSharedState *pel = NULL;
+dsa_area *pel_area = NULL;
 
 /* GUC variables */
-bool pel_enabled = false;
 bool pel_done = false;
+bool pel_enabled = false;
+int pel_frequency = 60;
+int pel_max_workers = 1;
 int  reject_limit = 0;
 char *query_tag = NULL;
 bool pel_synchronous = false;
@@ -94,18 +110,32 @@ char *current_dml_table = NULL;
 char current_dml_kind = '\0';
 char *current_bind_parameters = NULL;
 
+/* Current nesting depth of ExecutorRun calls */
+static int	exec_nested_level = 0;
+
 /* cache to store query of prepared stamement */
 struct HTAB *PreparedCache = NULL;
 
 /* Functions declaration */
 void        _PG_init(void);
 void        _PG_fini(void);
-void        exitHook(int code, Datum arg);
+
+extern PGDLLEXPORT Datum pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(pg_dbms_errlog_publish_queue);
+
+static void pel_shmem_startup(void);
 static void pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO);
 static void pel_ExecutorStart(QueryDesc *queryDesc, int eflags);
+static void pel_ExecutorRun(QueryDesc *queryDesc,
+							ScanDirection direction,
+							uint64 count, bool execute_once);
+static void pel_ExecutorFinish(QueryDesc *queryDesc);
+static void pel_ExecutorEnd(QueryDesc *queryDesc);
 static void pel_log_error(ErrorData *edata);
+static Size pel_memsize(void);
 char *lookupCachedPrepared(const char *preparedName);
 void removeCachedPrepared(const char *localPreparedName);
+static void pel_setupCachedPreparedHash(void);
 void putCachedPrepared(const char *preparedName, const char *preparedStmt);
 void pel_unregister_errlog_table(Oid relid);
 char *get_relation_name(Oid relid);
@@ -131,12 +161,31 @@ typedef struct PreparedCacheEntry
 	char preparedStmt[MAX_PREPARED_STMT_SIZE];
 } PreparedCacheEntry;
 
+static void
+pel_setupCachedPreparedHash(void)
+{
+	/* Initialize cache */
+	if (PreparedCache == NULL)
+	{
+		HASHCTL    ctl;
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(PreparedCacheKey);
+		ctl.entrysize = sizeof(PreparedCacheEntry);
+		/* allocate PrepareHash in the cache context */
+		ctl.hcxt = CacheMemoryContext;
+		PreparedCache = hash_create("pg_dbms_errlog_prepares", 8, &ctl,
+									 HASH_ELEM | HASH_CONTEXT | HASH_BLOBS);
+	}
+}
+
 void
 putCachedPrepared(const char *preparedName, const char *preparedStmt)
 {
 	PreparedCacheKey key = { { 0 } };
 	PreparedCacheEntry *entry;
 	bool found;
+
+	pel_setupCachedPreparedHash();
 
 	strncpy(key.preparedName, preparedName, sizeof(PreparedCacheKey));
 
@@ -161,6 +210,8 @@ removeCachedPrepared(const char *preparedName)
 	PreparedCacheEntry *entry;
 	bool found;
 
+	pel_setupCachedPreparedHash();
+
 	strncpy(key.preparedName, preparedName, sizeof(PreparedCacheKey));
 
 	entry = hash_search(PreparedCache, &key, HASH_REMOVE, &found);
@@ -178,6 +229,8 @@ lookupCachedPrepared(const char *preparedName)
 	PreparedCacheKey key = { { 0 } };
 	PreparedCacheEntry *entry;
 	bool found;
+
+	pel_setupCachedPreparedHash();
 
 	strncpy(key.preparedName, preparedName, sizeof(PreparedCacheKey));
 
@@ -197,6 +250,14 @@ lookupCachedPrepared(const char *preparedName)
 void
 _PG_init(void)
 {
+	BackgroundWorker worker;
+
+	if (!process_shared_preload_libraries_in_progress)
+	{
+		elog(ERROR, "This module can only be loaded via shared_preload_libraries");
+		return;
+	}
+
 	/* Define custom GUC variables */
 	DefineCustomBoolVariable( "pg_dbms_errlog.enabled",
 				"Enable/disable log of failing queries.",
@@ -208,6 +269,32 @@ _PG_init(void)
 				NULL,
 				NULL,
 				NULL);
+
+	DefineCustomIntVariable("pg_dbms_errlog.frequency",
+			"Defines the frequency for checking for data to process",
+			NULL,
+			&pel_frequency,
+			60,
+			10,
+			3600,
+			PGC_SUSET,
+			GUC_UNIT_S,
+			NULL,
+			NULL,
+			NULL);
+
+	DefineCustomIntVariable("pg_dbms_errlog.max_workers",
+			"Defines the maximum number of bgworker to launch to process data",
+			NULL,
+			&pel_max_workers,
+			1,
+			1,
+			max_worker_processes,
+			PGC_POSTMASTER,
+			0,
+			NULL,
+			NULL,
+			NULL);
 
 	DefineCustomIntVariable("pg_dbms_errlog.reject_limit",
 				"Maximum number of errors that can be encountered before the DML"
@@ -239,7 +326,7 @@ _PG_init(void)
 				NULL );
 
 	DefineCustomBoolVariable("pg_dbms_errlog.synchronous",
-				"Wait for pg_background error logging completion when an error happens",
+				"Wait for error queue completion when an error happens",
 				NULL,
 				&pel_synchronous,
 				false,
@@ -262,28 +349,42 @@ _PG_init(void)
 
 	EmitWarningsOnPlaceholders("pg_dbms_errlog");
 
-	/* Initialize cache */
-	if (PreparedCache == NULL)
-	{
-		HASHCTL    ctl;
-		MemSet(&ctl, 0, sizeof(ctl));
-		ctl.keysize = sizeof(PreparedCacheKey);
-		ctl.entrysize = sizeof(PreparedCacheEntry);
-		/* allocate PrepareHash in the cache context */
-		ctl.hcxt = CacheMemoryContext;
-		PreparedCache = hash_create("pg_dbms_errlog_prepares", 8, &ctl,
-									 HASH_ELEM | HASH_CONTEXT | HASH_BLOBS);
-	}
+	/*
+	 * Request additional shared resources.  (These are no-ops if we're not in
+	 * the postmaster process.)  We'll allocate or attach to the shared
+	 * resources in pel_shmem_startup().
+	 */
+	RequestAddinShmemSpace(pel_memsize());
+	RequestNamedLWLockTranche(PEL_TRANCHE_NAME, 1);
+
 
 	/* Install hooks */
+	prev_shmem_startup_hook = shmem_startup_hook;
+	shmem_startup_hook = pel_shmem_startup;
 	prev_ProcessUtility = ProcessUtility_hook;
 	ProcessUtility_hook = pel_ProcessUtility;
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = pel_ExecutorStart;
+	prev_ExecutorRun = ExecutorRun_hook;
+	ExecutorRun_hook = pel_ExecutorRun;
+	prev_ExecutorFinish = ExecutorFinish_hook;
+	ExecutorFinish_hook = pel_ExecutorFinish;
+	prev_ExecutorEnd = ExecutorEnd_hook;
+	ExecutorEnd_hook = pel_ExecutorEnd;
 	prev_emit_log_hook = emit_log_hook;
 	emit_log_hook = pel_log_error;
 	prev_post_parse_analyze_hook = post_parse_analyze_hook;
 
+	memset(&worker, 0, sizeof(BackgroundWorker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	worker.bgw_start_time =     BgWorkerStart_RecoveryFinished;
+	snprintf(worker.bgw_library_name, BGW_MAXLEN, "pg_dbms_errlog");
+	snprintf(worker.bgw_function_name, BGW_MAXLEN, "pel_worker_main");
+	snprintf(worker.bgw_name, BGW_MAXLEN, "pg_dbms_errlog main worker");
+	worker.bgw_restart_time = 10;
+	worker.bgw_main_arg = (Datum) 0;
+	worker.bgw_notify_pid = 0;
+	RegisterBackgroundWorker(&worker);
 }
 
 /*
@@ -293,10 +394,87 @@ void
 _PG_fini(void)
 {
 	/* Uninstall hooks */
+	shmem_startup_hook = prev_shmem_startup_hook;
 	ProcessUtility_hook = prev_ProcessUtility;
 	ExecutorStart_hook = prev_ExecutorStart;
+	ExecutorRun_hook = prev_ExecutorRun;
+	ExecutorFinish_hook = prev_ExecutorFinish;
+	ExecutorEnd_hook = prev_ExecutorEnd;
 	emit_log_hook = prev_emit_log_hook;
 	post_parse_analyze_hook = prev_post_parse_analyze_hook;
+}
+
+PGDLLEXPORT Datum
+pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS)
+{
+	bool sync;
+	int pos;
+
+	if (PG_ARGISNULL(0))
+		sync = false;
+	else
+		sync = PG_GETARG_BOOL(0);
+
+	pos = pel_publish_queue(sync);
+
+	PG_RETURN_BOOL(pos != PEL_PUBLISH_ERROR);
+}
+
+static void
+pel_shmem_startup(void)
+{
+	bool found;
+
+	if (prev_shmem_startup_hook)
+		prev_shmem_startup_hook();
+
+	/* reset in case this is a restart within the postmaster */
+	pel = NULL;
+
+	/* Create or attach to the shared memory state */
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+
+	pel = ShmemInitStruct("pg_dbms_errlog",
+			pel_memsize(),
+			&found);
+
+	if (!found)
+	{
+		int     trancheid;
+
+		/* First time through ... */
+		pel->bgw_saved_cur = 0;
+		pg_atomic_init_u32(&pel->bgw_procno, INVALID_PGPROCNO);
+		StaticAssertStmt(sizeof(INVALID_PGPROCNO <= sizeof(pel->bgw_procno)),
+				"INVALID_PGPROCNO is bigger for uint32");
+		pel->lock = &(GetNamedLWLockTranche(PEL_TRANCHE_NAME))->lock;
+		pel->pel_dsa_handle = DSM_HANDLE_INVALID;
+		pel->pqueue = InvalidDsaPointer;
+		pel->max_errs = 0;
+		pel->cur_err = 0;
+		pel->bgw_err = 0;
+
+		/* try to guess our trancheid */
+		for (trancheid = LWTRANCHE_FIRST_USER_DEFINED; ; trancheid++)
+		{
+			if (strcmp(GetLWLockIdentifier(PG_WAIT_LWLOCK, trancheid),
+						PEL_TRANCHE_NAME) == 0)
+			{
+				/* Found it! */
+				break;
+			}
+			if ((trancheid - LWTRANCHE_FIRST_USER_DEFINED) > 50)
+			{
+				/* No point trying so hard, just give up. */
+				trancheid = LWTRANCHE_FIRST_USER_DEFINED;
+				break;
+			}
+		}
+		Assert(trancheid >= LWTRANCHE_FIRST_USER_DEFINED);
+		pel->LWTRANCHE_PEL = trancheid;
+	}
+
+	LWLockRelease(AddinShmemInitLock);
 }
 
 static void
@@ -320,6 +498,42 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 		prev_ProcessUtility(PEL_PROCESSUTILITY_ARGS);
 	else
 		standard_ProcessUtility(PEL_PROCESSUTILITY_ARGS);
+
+	/* Publish or discard queue on COMMIT/ROLLBACK */
+	if (IsA(parsetree, TransactionStmt))
+	{
+		TransactionStmt *stmt = (TransactionStmt *) parsetree;
+
+		/* Check if the commit really performed a commit */
+		if (stmt->kind == TRANS_STMT_COMMIT)
+		{
+			bool is_commit = false;
+
+#if PG_VERSION_NUM >= 130000
+			if (!qc)
+			{
+				/* no way to tell, assume commit did happen */
+				is_commit = true;
+			}
+			else if (qc->commandTag == CMDTAG_ROLLBACK)
+				is_commit = false;
+			else
+				is_commit = true;
+#else
+			is_commit == (strcmp(completionTag) == "COMMIT");
+#endif
+
+			if (is_commit)
+			{
+				if (pel_publish_queue(pel_synchronous) == PEL_PUBLISH_ERROR)
+					elog(WARNING, "could not publish the queue");
+			}
+			else
+				pel_discard_queue();
+		}
+		else if (stmt->kind == TRANS_STMT_ROLLBACK)
+			pel_discard_queue();
+	}
 }
 
 void
@@ -399,6 +613,15 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			current_dml_kind = '?';
 	}
 
+	if (exec_nested_level == 0)
+	{
+		if (current_bind_parameters != NULL)
+		{
+			pfree(current_bind_parameters);
+			current_bind_parameters = NULL;
+		}
+	}
+
 	if (!pel_done)
 	{
 		if (queryDesc->params && queryDesc->params->numParams > 0)
@@ -414,6 +637,70 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 }
 
 /*
+ * ExecutorRun hook: all we need do is track nesting depth
+ */
+static void
+pel_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
+				 bool execute_once)
+{
+	exec_nested_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorRun)
+			prev_ExecutorRun(queryDesc, direction, count, execute_once);
+		else
+			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+	}
+	PG_FINALLY();
+	{
+		exec_nested_level--;
+	}
+	PG_END_TRY();
+}
+
+/*
+ * ExecutorFinish hook: all we need do is track nesting depth
+ */
+static void
+pel_ExecutorFinish(QueryDesc *queryDesc)
+{
+	exec_nested_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorFinish)
+			prev_ExecutorFinish(queryDesc);
+		else
+			standard_ExecutorFinish(queryDesc);
+	}
+	PG_FINALLY();
+	{
+		exec_nested_level--;
+	}
+	PG_END_TRY();
+}
+
+/*
+ * ExecutorEnd hook: done required cleanup
+ */
+static void
+pel_ExecutorEnd(QueryDesc *queryDesc)
+{
+	if (exec_nested_level == 0)
+	{
+		if (current_bind_parameters != NULL)
+		{
+			pfree(current_bind_parameters);
+			current_bind_parameters = NULL;
+		}
+	}
+
+	if (prev_ExecutorEnd)
+		prev_ExecutorEnd(queryDesc);
+	else
+		standard_ExecutorEnd(queryDesc);
+}
+
+/*
  * Log statement according to the user that launched the statement.
  */
 static void
@@ -423,11 +710,16 @@ pel_log_error(ErrorData *edata)
 	if (!edata || edata->elevel != ERROR)
 		return;
 
+	/* Ignore errors raised from non-backend processes */
+	if (!debug_query_string)
+		return;
+
 	if (edata->sqlerrcode == ERRCODE_SUCCESSFUL_COMPLETION)
 		return;
 
 	if (!pel_done)
 	{
+		MemoryContext pelcontext, oldcontext;
 		List *stmts;
 		RawStmt *raw;
 		Node    *stmt;
@@ -439,11 +731,18 @@ pel_log_error(ErrorData *edata)
 
 		pel_done = true; /* prevent recursive call */
 
+		pelcontext = AllocSetContextCreate(CurTransactionContext,
+								 "PEL temporary context",
+								 ALLOCSET_DEFAULT_SIZES);
+		oldcontext = MemoryContextSwitchTo(pelcontext);
 #if PG_VERSION_NUM >= 140000
 		stmts = raw_parser(sql, RAW_PARSE_DEFAULT);
 #else
 		stmts = raw_parser(sql);
 #endif
+		MemoryContextSwitchTo(oldcontext);
+		stmts = list_copy_deep(stmts);
+		MemoryContextDelete(pelcontext);
 
 		if (list_length(stmts) != 1)
 			elog(ERROR, "pel_log_error(): not supported");
@@ -495,7 +794,7 @@ pel_log_error(ErrorData *edata)
 		{
 			/* Unhandled DML, bail out */
 			return;
-                }
+		}
 		else
 		{
 			Assert(rv != NULL);
@@ -504,74 +803,88 @@ pel_log_error(ErrorData *edata)
 
 		relid = RangeVarGetRelid(rv, AccessShareLock, true);
 
-                if (!OidIsValid(relid))
-                {
-                        if (rv->schemaname)
-                                elog(WARNING, "could not find an oid for relation \"%s\".\"%s\"",
-                                                rv->schemaname, rv->relname);
-                        else
-                                elog(WARNING, "could not find an oid for relation \"%s\"",
-                                                rv->relname);
-                        return;
-                }
+		if (!OidIsValid(relid))
+		{
+			if (rv->schemaname)
+				elog(WARNING, "could not find an oid for relation \"%s\".\"%s\"",
+						rv->schemaname, rv->relname);
+			else
+				elog(WARNING, "could not find an oid for relation \"%s\"",
+						rv->relname);
+			return;
+		}
 
-                elog(DEBUG1, "pel_log_error(): OPERATION: %s, KIND: %c, RELID: %u", operation, current_dml_kind, relid);
+		elog(DEBUG1, "pel_log_error(): OPERATION: %s, KIND: %c, RELID: %u", operation, current_dml_kind, relid);
 
-                /* Get the associated error logging table if any */
-                if (OidIsValid(relid))
-                {
-                        StringInfoData relstmt;
+		/* Get the associated error logging table if any */
+		if (OidIsValid(relid))
+		{
+			StringInfoData relstmt;
 			StringInfoData msg;
-                        int rc = 0;
-			char *logtable;
-			int  finished = 0;
-			bool isnull;
+			int rc = 0;
+			Oid  logtable;
+			bool isnull, ok;
 
 			initStringInfo(&relstmt);
 
 			rc = SPI_connect();
 			if (rc != SPI_OK_CONNECT)
-				ereport(ERROR, (errmsg("Can not connect to SPI manager to retrieve error log table for \"%s\", rc=%d. ", rv->relname, rc)));
-			appendStringInfo(&relstmt, "SELECT concat(quote_ident(n.nspname), '.', quote_ident(c.relname))::text FROM %s.register_errlog_tables e JOIN pg_catalog.pg_class c ON (c.oid = e.relerrlog) JOIN pg_namespace n ON (c.relnamespace=n.oid) WHERE e.reldml = %u", PEL_NAMESPACE_NAME, relid);
+			{
+				ereport(ERROR,
+						(errmsg("Can not connect to SPI manager to retrieve"
+								" error log table for \"%s\", rc=%d. ",
+								rv->relname, rc)));
+			}
+
+			appendStringInfo(&relstmt, "SELECT e.relerrlog"
+					" FROM %s.%s e"
+					" WHERE e.reldml = %u",
+					quote_identifier(PEL_NAMESPACE_NAME),
+					quote_identifier(PEL_REGISTRATION_TABLE),
+					relid);
+
 			rc = SPI_exec(relstmt.data, 0);
 			if (rc != SPI_OK_SELECT || SPI_processed != 1)
-				ereport(ERROR, (errmsg("SPI execution failure (rc=%d) on query: %s",
-										rc, relstmt.data)));
-			logtable = TextDatumGetCString(SPI_getbinval(SPI_tuptable->vals[0],
+			{
+				ereport(ERROR,
+						(errmsg("SPI execution failure (rc=%d) on query: %s",
+								rc, relstmt.data)));
+			}
+
+			logtable = DatumGetObjectId(SPI_getbinval(SPI_tuptable->vals[0],
 										SPI_tuptable->tupdesc,
 										1,
 										&isnull));
 			if (isnull)
-				ereport(ERROR, (errmsg("can not get error logging table for table %s", relstmt.data)));
+			{
+				ereport(ERROR,
+						(errmsg("can not get error logging table for table %s",
+						 relstmt.data)));
+			}
 
 			/* generate the full error message to log */
 			initStringInfo(&msg);
 			generate_error_message(edata, &msg);
 			if (current_bind_parameters && current_bind_parameters[0] != '\0')
-				appendStringInfo(&msg, "PARAMETERS: %s", current_bind_parameters);
+			{
+				appendStringInfo(&msg, "PARAMETERS: %s",
+								 current_bind_parameters);
 
-			/*
-			 * Append the error to the log table
-			 */
-			initStringInfo(&relstmt);
-			appendStringInfo(&relstmt,
-									(pel_synchronous ? PEL_SYNC_QUERY : PEL_ASYNC_QUERY),
-									logtable,
-									unpack_sql_state(edata->sqlerrcode),
-									quote_literal_cstr(edata->message),
-									current_dml_kind,
-									(query_tag) ? quote_literal_cstr(query_tag) : "NULL",
-									quote_literal_cstr(sql),
-									quote_literal_cstr(msg.data)
-									);
-			rc = SPI_execute(relstmt.data, true, 0);
-			if (rc != SPI_OK_SELECT || SPI_processed != 1)
-				ereport(ERROR, (errmsg("SPI execution failure (rc=%d) on query: %s",
-										rc, relstmt.data)));
+				pfree(current_bind_parameters);
+				current_bind_parameters = NULL;
+			}
 
-			finished = SPI_finish();
-			if (finished != SPI_OK_FINISH)
-				ereport(ERROR, (errmsg("could not disconnect from SPI manager")));
+			/* Queue the error information. */
+			ok = pel_queue_error(logtable,
+					edata->sqlerrcode,
+					edata->message,
+					current_dml_kind,
+					query_tag,
+					sql,
+					msg.data,
+					pel_synchronous);
+			if (!ok)
+				ereport(ERROR, (errmsg("could not queue error detail")));
 
 			elog(DEBUG1, "pel_log_error(): ERRCODE: %s;KIND: %c,TAG: %s;MESSAGE: %s;QUERY: %s;TABLE: %s; INFO: %s",
 								unpack_sql_state(edata->sqlerrcode),
@@ -587,6 +900,16 @@ pel_log_error(ErrorData *edata)
 			edata->output_to_client = false;
 	}
 	pel_done = false;
+}
+
+static Size
+pel_memsize(void)
+{
+	Size size;
+
+	size = CACHELINEALIGN(sizeof(pelSharedState));
+
+	return size;
 }
 
 /*
@@ -614,19 +937,19 @@ generate_error_message (ErrorData *edata, StringInfoData *buf)
 	appendStringInfo(buf, "%s:  ", "ERROR");
 	appendStringInfo(buf, "%s: ", unpack_sql_state(edata->sqlerrcode));
 
-        if (edata->message)
-                append_with_tabs(buf, edata->message);
-        else
-                append_with_tabs(buf, _("missing error text"));
+	if (edata->message)
+		append_with_tabs(buf, edata->message);
+	else
+		append_with_tabs(buf, _("missing error text"));
 
-        if (edata->cursorpos > 0)
-                appendStringInfo(buf, _(" at character %d"),
-                                                 edata->cursorpos);
-        else if (edata->internalpos > 0)
-                appendStringInfo(buf, _(" at character %d"),
-                                                 edata->internalpos);
+	if (edata->cursorpos > 0)
+		appendStringInfo(buf, _(" at character %d"),
+				edata->cursorpos);
+	else if (edata->internalpos > 0)
+		appendStringInfo(buf, _(" at character %d"),
+				edata->internalpos);
 
-        appendStringInfoChar(buf, '\n');
+	appendStringInfoChar(buf, '\n');
 
 	if (edata->detail_log)
 	{
@@ -658,12 +981,12 @@ generate_error_message (ErrorData *edata, StringInfoData *buf)
 		append_with_tabs(buf, edata->context);
 		appendStringInfoChar(buf, '\n');
 	}
-        if (debug_query_string != NULL)
-        {
-                appendStringInfoString(buf, _("STATEMENT:  "));
-                append_with_tabs(buf, debug_query_string);
-                appendStringInfoChar(buf, '\n');
-        }
+	if (debug_query_string != NULL)
+	{
+		appendStringInfoString(buf, _("STATEMENT:  "));
+		append_with_tabs(buf, debug_query_string);
+		appendStringInfoChar(buf, '\n');
+	}
 }
 
 #if PG_VERSION_NUM < 130000

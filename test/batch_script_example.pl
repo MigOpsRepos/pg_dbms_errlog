@@ -16,7 +16,6 @@ die "ERROR: can't connect to database ontrib_regression\n" if (not defined $dbh)
 print "---------------------------------------------\n";
 print "Create the extension and initialize the test\n";
 print "---------------------------------------------\n";
-$dbh->do("CREATE EXTENSION pg_background");
 $dbh->do("CREATE EXTENSION pg_dbms_errlog");
 $dbh->do("LOAD 'pg_dbms_errlog'");
 $dbh->do("SET pg_dbms_errlog.synchronous = on;");
