@@ -526,7 +526,7 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 			else if (qc->commandTag != CMDTAG_ROLLBACK)
 				is_commit = true;
 #else
-			if (strcmp(completionTag, "COMMIT") == 0)
+			if (strcmp(completionTag, "ROLLBACK") != 0)
 				is_commit = true;
 #endif
 
