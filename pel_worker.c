@@ -316,7 +316,7 @@ pel_dynworker_main(Datum main_arg)
 
 	/* XXX should we use a non privileged user here? */
 	BackgroundWorkerInitializeConnectionByOid(entry->dbid, InvalidOid
-#if PG_VERSION_NUM >= 100000
+#if PG_VERSION_NUM >= 110000
 			,0
 #endif
 			);

@@ -22,6 +22,7 @@
 #include "executor/executor.h"
 #include "executor/spi.h"
 #include "miscadmin.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/analyze.h"
 #include "parser/parser.h"
@@ -34,6 +35,9 @@
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
+#if PG_VERSION_NUM < 110000
+#include "utils/memutils.h"
+#endif
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -147,7 +151,11 @@ char *BuildParamLogString(ParamListInfo params, char **knownTextValues, int maxl
 /* Copied from src/backend/utils/mb/stringinfo_mb.c */
 void appendStringInfoStringQuoted(StringInfo str, const char *s, int maxlen);
 /* Copied from src/backend/access/transam/xact.c */
-bool IsAbortedTransactionBlockState(void);
+/* Adapted from src/backend/nodes/list.c */
+static List *list_copy_deep(const List *oldlist);
+#endif
+#if PG_VERSION_NUM < 110000
+static void appendBinaryStringInfoNT(StringInfo str, const char *data, int datalen);
 #endif
 
 typedef struct PreparedCacheKey
@@ -649,14 +657,12 @@ pel_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
 			prev_ExecutorRun(queryDesc, direction, count, execute_once);
 		else
 			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+		exec_nested_level--;
 	}
-#if PG_VERSION_NUM >= 130000
-	PG_FINALLY();
-#else
 	PG_CATCH();
-#endif
 	{
 		exec_nested_level--;
+		PG_RE_THROW();
 	}
 	PG_END_TRY();
 }
@@ -674,14 +680,12 @@ pel_ExecutorFinish(QueryDesc *queryDesc)
 			prev_ExecutorFinish(queryDesc);
 		else
 			standard_ExecutorFinish(queryDesc);
+		exec_nested_level--;
 	}
-#if PG_VERSION_NUM >= 130000
-	PG_FINALLY();
-#else
 	PG_CATCH();
-#endif
 	{
 		exec_nested_level--;
+		PG_RE_THROW();
 	}
 	PG_END_TRY();
 }
@@ -748,11 +752,7 @@ pel_log_error(ErrorData *edata)
 		stmts = raw_parser(sql);
 #endif
 		MemoryContextSwitchTo(oldcontext);
-#if PG_VERSION_NUM >= 130000
 		stmts = list_copy_deep(stmts);
-#else
-		stmts = list_copy(stmts);
-#endif
 		MemoryContextDelete(pelcontext);
 
 		if (list_length(stmts) != 1)
@@ -1141,5 +1141,86 @@ appendStringInfoStringQuoted(StringInfo str, const char *s, int maxlen)
 
 	if (copy)
 		pfree(copy);
+}
+
+#ifdef USE_ASSERT_CHECKING
+/*
+ * Check that the specified List is valid (so far as we can tell).
+ */
+static void
+check_list_invariants(const List *list)
+{
+	if (list == NIL)
+		return;
+
+	Assert(list->length > 0);
+	Assert(list->head != NULL);
+	Assert(list->tail != NULL);
+
+	Assert(list->type == T_List ||
+		   list->type == T_IntList ||
+		   list->type == T_OidList);
+
+	if (list->length == 1)
+		Assert(list->head == list->tail);
+	if (list->length == 2)
+		Assert(list->head->next == list->tail);
+	Assert(list->tail->next == NULL);
+}
+#else
+#define check_list_invariants(l)
+#endif							/* USE_ASSERT_CHECKING */
+
+/*
+ * Return a deep copy of the specified list.
+ *
+ * The list elements are copied via copyObject(), so that this function's
+ * idea of a "deep" copy is considerably deeper than what list_free_deep()
+ * means by the same word.
+ */
+static List *
+list_copy_deep(const List *oldlist)
+{
+	List	   *newlist = NIL;
+	ListCell   *lc;
+
+	if (oldlist == NIL)
+		return NIL;
+
+	if (oldlist->type != T_List)
+	{
+		/* Should not be reached in our code */
+		elog(ERROR, "list type unsupported");
+	}
+
+	/* This is only sensible for pointer Lists */
+	Assert(IsA(oldlist, List));
+
+	foreach(lc, oldlist)
+		newlist = lappend(newlist, copyObjectImpl(lfirst(lc)));
+
+	check_list_invariants(newlist);
+	return newlist;
+}
+#endif
+
+#if PG_VERSION_NUM < 110000
+/*
+ * appendBinaryStringInfoNT
+ *
+ * Append arbitrary binary data to a StringInfo, allocating more space
+ * if necessary. Does not ensure a trailing null-byte exists.
+ */
+static void
+appendBinaryStringInfoNT(StringInfo str, const char *data, int datalen)
+{
+	Assert(str != NULL);
+
+	/* Make more room if needed */
+	enlargeStringInfo(str, datalen);
+
+	/* OK, append the data */
+	memcpy(str->data + str->len, data, datalen);
+	str->len += datalen;
 }
 #endif
