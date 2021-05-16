@@ -11,9 +11,8 @@
 
 #include "postgres.h"
 
-#if PG_VERSION_NUM >= 100000
+#include "storage/lwlock.h"
 #include "utils/dsa.h"
-#endif
 
 #if PG_VERSION_NUM < 120000
 #define table_openrv(r,l)	heap_openrv(r,l)

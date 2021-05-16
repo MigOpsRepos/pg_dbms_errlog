@@ -26,7 +26,11 @@
 #endif
 #include "postmaster/bgworker.h"
 #include "storage/latch.h"
+#include "storage/proc.h"
 #include "storage/procsignal.h"
+#if PG_VERSION_NUM >= 140000
+#include "utils/backend_status.h"
+#endif
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
