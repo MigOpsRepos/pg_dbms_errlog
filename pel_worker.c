@@ -208,16 +208,19 @@ pel_worker_main(Datum main_arg)
 	items.handles = (BackgroundWorkerHandle **)
 		palloc(sizeof(BackgroundWorkerHandle *) * pel_max_workers);
 
+	elog(PEL_DEBUG, "pel_worker_main(): set bgworker procno: %d",
+		 MyProc->pgprocno);
 	pg_atomic_write_u32(&pel->bgw_procno, MyProc->pgprocno);
 	pel_init_dsm(true);
 
 	while (true)
 	{
-		int i, last;
+		int i, last, rc;
 
 		pel_process_sighup();
 
 		PS_DISPLAY("checking for queue items to process");
+		elog(PEL_DEBUG, "pel_worker_main() checking for queue items to process");
 		pel->bgw_saved_cur = -1;
 		pel_get_queue_items(&items);
 		Assert(pel->bgw_saved_cur != -1);
@@ -225,7 +228,11 @@ pel_worker_main(Datum main_arg)
 		if (items.nb_db > 0)
 		{
 			PS_DISPLAY("launching dynamic bgworkers");
+			elog(PEL_DEBUG, "pel_worker_main() will launch %d workers",
+				 items.nb_db);
 		}
+		else
+			elog(PEL_DEBUG, "pel_worker_main() no worker will be launched");
 
 		last = -1;
 		for (i = 0; i < items.nb_db; i++)
@@ -252,10 +259,14 @@ pel_worker_main(Datum main_arg)
 						items.starting_pos[i]);
 				break;
 			}
+			else
+				elog(PEL_DEBUG, "pel_worker_main() registered a bgworker for"
+						" db %u", items.starting_pos[i]);
 			last = i;
 		}
 
 		PS_DISPLAY("waiting for dynamic bgworker to finish");
+		elog(PEL_DEBUG, "pel_worker_main() waiting for dynamic bgworker to finish");
 		/* And now wait for the completion of all the workers */
 		for (i = 0; i <= last; i++)
 		{
@@ -266,14 +277,20 @@ pel_worker_main(Datum main_arg)
 			{
 				case BGWH_STOPPED:
 					/* done, we can wait for the next one */
+					elog(PEL_DEBUG, "pel_worker_main() dynamic bgworker %d/%d"
+							" terminated", i + 1, last + 1);
 					break;
 				case BGWH_POSTMASTER_DIED:
 					/* postmaster died, simply exit */
+					elog(PEL_DEBUG, "pel_worker_main(): set bgworker procno: %d",
+						 INVALID_PGPROCNO);
 					pg_atomic_write_u32(&pel->bgw_procno, INVALID_PGPROCNO);
 					exit(1);
 					break;
 				default:
 					/* should not happen */
+					elog(PEL_DEBUG, "pel_worker_main(): set bgworker procno: %d",
+						 INVALID_PGPROCNO);
 					pg_atomic_write_u32(&pel->bgw_procno, INVALID_PGPROCNO);
 					elog(WARNING, "unexpected worker status %d", status);
 					exit(1);
@@ -286,11 +303,14 @@ pel_worker_main(Datum main_arg)
 		}
 
 		PS_DISPLAY("sleeping");
-		WaitLatch(&MyProc->procLatch,
+		elog(PEL_DEBUG, "pel_worker_main(): sleeping (procno: %d)",
+			 MyProc->pgprocno);
+		rc = WaitLatch(&MyProc->procLatch,
 				WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 				pel_frequency * 1000,
 				PG_WAIT_EXTENSION);
 		ResetLatch(&MyProc->procLatch);
+		elog(PEL_DEBUG, "pel_worker_main() woke up, rc: %d", rc);
 	}
 }
 
@@ -371,7 +391,7 @@ pel_dynworker_main(Datum main_arg)
                                 ereport(WARNING,
 						(errmsg("SPI execution failure (rc=%d) on query: %s",
 											rc, sql.data)));
-			elog(DEBUG1, "pel_dynworker_main(): inserted %ld rows", SPI_processed);
+			elog(PEL_DEBUG, "pel_dynworker_main(): inserted %ld rows", SPI_processed);
 			pgstat_report_activity(STATE_IDLE, NULL);
 
 			pfree(sql.data);
@@ -391,7 +411,7 @@ pel_dynworker_main(Datum main_arg)
 
 		/* Move to the next item in the batch if any */
 		pos = PEL_POS_NEXT(pos);
-		elog(DEBUG1, "pel_dynworker_main(): new pos after processing %d", pos);
+		elog(PEL_DEBUG, "pel_dynworker_main(): new pos after processing %d", pos);
 
 		if (pos > limit)
 			break;

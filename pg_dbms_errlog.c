@@ -101,6 +101,7 @@ pelSharedState *pel = NULL;
 dsa_area *pel_area = NULL;
 
 /* GUC variables */
+bool pel_debug = false;
 bool pel_done = false;
 bool pel_enabled = false;
 int pel_frequency = 60;
@@ -268,6 +269,17 @@ _PG_init(void)
 	}
 
 	/* Define custom GUC variables */
+	DefineCustomBoolVariable( "pg_dbms_errlog.debug",
+				"Enable/disable debug traces.",
+				NULL,
+				&pel_debug,
+				false,
+				PGC_USERSET, /* Any user can set it */
+				0,
+				NULL,
+				NULL,
+				NULL);
+
 	DefineCustomBoolVariable( "pg_dbms_errlog.enabled",
 				"Enable/disable log of failing queries.",
 				NULL,

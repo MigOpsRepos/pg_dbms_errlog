@@ -344,13 +344,13 @@ pel_publish_queue(bool sync)
 		 */
 		if (local_data.last_pos < 0 || !sync)
 		{
-			elog(DEBUG1, "pel_publish_queue(): no queued work or async mode (%d)", sync);
+			elog(PEL_DEBUG, "pel_publish_queue(): no queued work or async mode (%d)", sync);
 			return PEL_PUBLISH_EMPTY;
 		}
 
 		/* Restore the last known queue entry position */
 		pos = local_data.last_pos;
-		elog(DEBUG1, "pel_publish_queue(): restore the last known queue entry position %d", pos);
+		elog(PEL_DEBUG, "pel_publish_queue(): restore the last known queue entry position %d", pos);
 		LWLockAcquire(pel->lock, LW_EXCLUSIVE);
 		/*
 		 * Check if the entry in that position is still ours.  If yes, ask to
@@ -416,7 +416,7 @@ pel_publish_queue(bool sync)
 	pel_cleanup_local();
 
 wait_for_bgworker:
-	elog(DEBUG1, "pel_publish_queue(): wait_for_bgworker, sync: %d", sync);
+	elog(PEL_DEBUG, "pel_publish_queue(): wait_for_bgworker, sync: %d", sync);
 	Assert(!LWLockHeldByMe(pel->lock));
 
 	if (sync == true)
@@ -440,7 +440,7 @@ wait_for_bgworker:
 			else
 				CHECK_FOR_INTERRUPTS();
 
-			elog(DEBUG1, "pel_publish_queue(): WaitLatch for %d", sleep_time);
+			elog(PEL_DEBUG, "pel_publish_queue(): WaitLatch for %d", sleep_time);
 			WaitLatch(&MyProc->procLatch,
 					WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 					sleep_time,
@@ -453,12 +453,15 @@ wait_for_bgworker:
 		}
 
 		/* Wake up the bgworker to force queue processing */
+		elog(PEL_DEBUG, "pel_publish_queue(): set bgworker latch (procno: %d)",
+			 bgw_procno);
 		SetLatch(&ProcGlobal->allProcs[bgw_procno].procLatch);
 
 		/*
 		 * And sleep until the launched dynamic bgworker wakes us.
 		 */
-		elog(DEBUG1, "pel_publish_queue(): sleep until the launched dynamic bgworker wakes us");
+		elog(PEL_DEBUG, "pel_publish_queue(): sleep until the launched dynamic"
+				" bgworker wakes us, procno: %d", MyProc->pgprocno);
 		processed = false;
 		while (!processed)
 		{
@@ -469,6 +472,8 @@ wait_for_bgworker:
 					1000,
 					PG_WAIT_EXTENSION);
 			ResetLatch(&MyProc->procLatch);
+			elog(PEL_DEBUG, "pel_publish_queue() woke up, rc: %d"
+					" (procno: %d)", rc, MyProc->pgprocno);
 
 			/*
 			 * If we're in the middle of an error interruption, interrupts will
@@ -490,6 +495,8 @@ wait_for_bgworker:
 			if (pg_atomic_read_u32(&pel->bgw_procno) != bgw_procno)
 			{
 				bgw_procno = pg_atomic_read_u32(&pel->bgw_procno);
+				elog(PEL_DEBUG, "pel_publish_queue(): bgworker restarted"
+						" (procno: %d)", bgw_procno);
 				continue;
 			}
 
@@ -499,7 +506,7 @@ wait_for_bgworker:
 			 * possible the system consumed the whole queue entries and the
 			 * entry at the given position now belongs to another backend.
 			 */
-			elog(DEBUG1, "pel_publish_queue(): Checking if item at pos %d is processed %d (queue.pgprocno: %d / MyProc->pgprocno: %d.", pos, queue.entries[pos].processed, queue.entries[pos].pgprocno, MyProc->pgprocno);
+			elog(PEL_DEBUG, "pel_publish_queue(): Checking if item at pos %d is processed %d (queue.pgprocno: %d / MyProc->pgprocno: %d.", pos, queue.entries[pos].processed, queue.entries[pos].pgprocno, MyProc->pgprocno);
 			processed = (queue.entries[pos].processed ||
 					queue.entries[pos].pgprocno != MyProc->pgprocno);
 			LWLockRelease(pel->lock);
@@ -508,14 +515,14 @@ wait_for_bgworker:
 			if (processed)
 				local_data.last_pos = -1;
 
-			elog(DEBUG1, "pel_publish_queue(): queue entry %d processed last_pos = %d", pos, local_data.last_pos);
+			elog(PEL_DEBUG, "pel_publish_queue(): queue entry %d processed last_pos = %d", pos, local_data.last_pos);
 		}
 	}
 
 	return pos;
 
 error:
-	elog(DEBUG1, "pel_publish_queue(): error, returning invalid pos %d", PEL_PUBLISH_ERROR);
+	elog(PEL_DEBUG, "pel_publish_queue(): error, returning invalid pos %d", PEL_PUBLISH_ERROR);
 	local_data.last_pos = -1;
 	return PEL_PUBLISH_ERROR;
 }
@@ -543,7 +550,7 @@ pel_worker_entry_complete(void)
 	Assert(!LWLockHeldByMe(pel->lock));
 	Assert(local_data.pos >= 0);
 
-	elog(DEBUG1, "pel_worker_entry_complete(): Mark the entry as processed");
+	elog(PEL_DEBUG, "pel_worker_entry_complete(): Mark the entry as processed");
 	LWLockAcquire(pel->lock, LW_EXCLUSIVE);
 
 	/* Mark the entry as processed */
@@ -554,7 +561,7 @@ pel_worker_entry_complete(void)
 		pgprocno = INVALID_PGPROCNO;
 	LWLockRelease(pel->lock);
 
-	elog(DEBUG1, "pel_worker_entry_complete(): notify caller %d if it was required after releasing pel->lock", pgprocno);
+	elog(PEL_DEBUG, "pel_worker_entry_complete(): notify caller %d if it was required after releasing pel->lock", pgprocno);
 	/* Notify caller if it was required after releasing pel->lock */
 	if (pgprocno != INVALID_PGPROCNO)
 		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
@@ -786,7 +793,7 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 	if (sync)
 	{
 		int pos = pel_publish_queue(true);
-		elog(DEBUG1, "pel_queue_error(): queue position returned by pel_publish_queue(): %d", pos);
+		elog(PEL_DEBUG, "pel_queue_error(): queue position returned by pel_publish_queue(): %d", pos);
 
 		if (pos == PEL_PUBLISH_ERROR)
 		{

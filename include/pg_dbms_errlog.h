@@ -26,6 +26,8 @@
 #define PEL_POS_PREV(pos)	( ((pos) == 0) ? pel->max_errs : (pos) - 1)
 #define PEL_POS_NEXT(pos)	( ((pos) >= pel->max_errs) ? 0 : (pos) + 1)
 
+#define PEL_DEBUG		(pel_debug ? WARNING : DEBUG1)
+
 /* Global shared state */
 typedef struct pelSharedState {
 	int			bgw_saved_cur; /* upper limit for dynbgworker, only written in
@@ -46,6 +48,7 @@ extern dsa_area *pel_area;
 #endif
 
 /* GUC variables */
+extern bool pel_debug;
 extern int pel_frequency;
 extern int pel_max_workers;
 
