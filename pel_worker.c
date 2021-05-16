@@ -302,6 +302,16 @@ pel_worker_main(Datum main_arg)
 			pfree(items.handles[i]);
 		}
 
+		/*
+		 * If we just processed some queued entries, check if some more work
+		 * has been queue since we last woke up and process it immediately,
+		 * otherwise we might miss some request from backends and let them wait
+		 * up to pel_frequency, as their SetLatch could be reset by the dynamic
+		 * bgworker infrastructure.
+		 */
+		if (last >= 0)
+			continue;
+
 		PS_DISPLAY("sleeping");
 		elog(PEL_DEBUG, "pel_worker_main(): sleeping (procno: %d)",
 			 MyProc->pgprocno);
