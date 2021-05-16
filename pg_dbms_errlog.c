@@ -402,7 +402,7 @@ _PG_init(void)
 	snprintf(worker.bgw_library_name, BGW_MAXLEN, "pg_dbms_errlog");
 	snprintf(worker.bgw_function_name, BGW_MAXLEN, "pel_worker_main");
 	snprintf(worker.bgw_name, BGW_MAXLEN, "pg_dbms_errlog main worker");
-	worker.bgw_restart_time = 10;
+	worker.bgw_restart_time = 0;
 	worker.bgw_main_arg = (Datum) 0;
 	worker.bgw_notify_pid = 0;
 	RegisterBackgroundWorker(&worker);
