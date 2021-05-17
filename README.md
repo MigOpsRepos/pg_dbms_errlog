@@ -170,6 +170,12 @@ gilles=# \d "ERRORS"."ERR$_EMPTABLE"
  pg_err_detail$ | text         |                 |           |
 ```
 
+A user must be granted the DML privileges to the table and to the error log
+table to be able to use this feature. Insert to the registration table is done
+internally by superuser. To allow a user to create an error logging table he
+must be granted to execute the create_error_log() function and have read/write
+access to the registration table dbms_errlog.register_errlog_tables.
+
 ### [Limitations](#limitation)
 
 As explain above the pg_dbms_errlog extension copy the failing DML query into

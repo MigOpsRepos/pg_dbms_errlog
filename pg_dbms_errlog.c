@@ -18,6 +18,7 @@
 #endif
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_namespace.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
@@ -292,30 +293,30 @@ _PG_init(void)
 				NULL);
 
 	DefineCustomIntVariable("pg_dbms_errlog.frequency",
-			"Defines the frequency for checking for data to process",
-			NULL,
-			&pel_frequency,
-			60,
-			10,
-			3600,
-			PGC_SUSET,
-			GUC_UNIT_S,
-			NULL,
-			NULL,
-			NULL);
+				"Defines the frequency for checking for data to process",
+				NULL,
+				&pel_frequency,
+				60,
+				10,
+				3600,
+				PGC_SUSET,
+				GUC_UNIT_S,
+				NULL,
+				NULL,
+				NULL);
 
 	DefineCustomIntVariable("pg_dbms_errlog.max_workers",
-			"Defines the maximum number of bgworker to launch to process data",
-			NULL,
-			&pel_max_workers,
-			1,
-			1,
-			max_worker_processes,
-			PGC_POSTMASTER,
-			0,
-			NULL,
-			NULL,
-			NULL);
+				"Defines the maximum number of bgworker to launch to process data",
+				NULL,
+				&pel_max_workers,
+				1,
+				1,
+				max_worker_processes,
+				PGC_POSTMASTER,
+				0,
+				NULL,
+				NULL,
+				NULL);
 
 	DefineCustomIntVariable("pg_dbms_errlog.reject_limit",
 				"Maximum number of errors that can be encountered before the DML"
@@ -565,8 +566,22 @@ pel_unregister_errlog_table(Oid relid)
 	SysScanDesc   scan;
 	HeapTuple     tuple;
 	bool          found = false;
+	bool need_priv_escalation = !superuser(); /* we might be a SU */
+	Oid  save_userid;
+	int  save_sec_context;
 
 	elog(DEBUG1, "Looking for registered error logging table with relid = %d", relid);
+
+	/* Inserting error to log table must be created as SU */
+	if (need_priv_escalation)
+	{
+		/* Get current user's Oid and security context */
+		GetUserIdAndSecContext(&save_userid, &save_sec_context);
+		/* Become superuser */
+		SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, save_sec_context
+							| SECURITY_LOCAL_USERID_CHANGE
+							| SECURITY_RESTRICTED_OPERATION);
+	}
 
 	/* Set and open the error log registration relation */
 	rv = makeRangeVar(PEL_NAMESPACE_NAME, PEL_REGISTRATION_TABLE, -1);
@@ -616,6 +631,11 @@ pel_unregister_errlog_table(Oid relid)
 		systable_endscan(scan);
 		table_close(rel, RowExclusiveLock);
 	}
+
+	/* Restore user's privileges */
+	if (need_priv_escalation)
+		SetUserIdAndSecContext(save_userid, save_sec_context);
+
 }
 
 static void
@@ -848,8 +868,24 @@ pel_log_error(ErrorData *edata)
 			int rc = 0;
 			Oid  logtable;
 			bool isnull, ok;
+			bool need_priv_escalation = !superuser(); /* we might be a SU */
+			Oid  save_userid;
+			int  save_sec_context;
+			Relation      rel;
+			AclResult     aclresult;
 
 			initStringInfo(&relstmt);
+
+			/* Inserting error to log table must be created as SU */
+                        if (need_priv_escalation)
+			{
+				/* Get current user's Oid and security context */
+				GetUserIdAndSecContext(&save_userid, &save_sec_context);
+				/* Become superuser */
+				SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, save_sec_context
+									| SECURITY_LOCAL_USERID_CHANGE
+									| SECURITY_RESTRICTED_OPERATION);
+			}
 
 			rc = SPI_connect();
 			if (rc != SPI_OK_CONNECT)
@@ -885,6 +921,34 @@ pel_log_error(ErrorData *edata)
 						(errmsg("can not get error logging table for table %s",
 						 relstmt.data)));
 			}
+
+			rc = SPI_finish();
+			if (rc != SPI_OK_FINISH)
+				ereport(ERROR, (errmsg("could not disconnect from SPI manager")));
+
+			/* Restore user's privileges */
+			if (need_priv_escalation)
+				SetUserIdAndSecContext(save_userid, save_sec_context);
+
+			/*
+			 * Try to open the error log relation to catch priviledge issues
+			 * as the bg_worker will have the full priviledge on the table.
+			 */
+#if (PG_VERSION_NUM >= 120000)
+			rel = table_open(logtable, NoLock);
+#else
+			rel = heap_open(logtable, NoLock);
+#endif
+			aclresult = pg_class_aclcheck(RelationGetRelid(rel), GetUserId(),
+											ACL_INSERT);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
+							RelationGetRelationName(rel));
+#if (PG_VERSION_NUM >= 120000)
+			table_close(rel, NoLock);
+#else
+			heap_close(rel, NoLock);
+#endif
 
 			/* generate the full error message to log */
 			initStringInfo(&msg);
