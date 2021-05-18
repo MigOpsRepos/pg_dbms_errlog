@@ -56,11 +56,6 @@
 #error Minimum version of PostgreSQL required is 10
 #endif
 
-#if PG_VERSION_NUM < 120000
-#define table_openrv(r,l)      heap_openrv(r,l)
-#define table_close(r,l)       heap_close(r,l)
-#endif
-
 /* Define ProcessUtility hook proto/parameters following the PostgreSQL version */
 #if PG_VERSION_NUM >= 130000
 #define PEL_PROCESSUTILITY_PROTO PlannedStmt *pstmt, const char *queryString, \
@@ -504,6 +499,8 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 {
 	Node *parsetree = pstmt->utilityStmt;
 
+	pel_done = false;
+
 	if (IsA(parsetree, PrepareStmt))
 	{
 		PrepareStmt *stmt = (PrepareStmt *) parsetree;
@@ -655,6 +652,7 @@ pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 
 	if (exec_nested_level == 0)
 	{
+		pel_done = false;
 		if (current_bind_parameters != NULL)
 		{
 			pfree(current_bind_parameters);
@@ -934,21 +932,13 @@ pel_log_error(ErrorData *edata)
 			 * Try to open the error log relation to catch priviledge issues
 			 * as the bg_worker will have the full priviledge on the table.
 			 */
-#if (PG_VERSION_NUM >= 120000)
-			rel = table_open(logtable, NoLock);
-#else
-			rel = heap_open(logtable, NoLock);
-#endif
+			rel = table_open(logtable, AccessShareLock);
 			aclresult = pg_class_aclcheck(RelationGetRelid(rel), GetUserId(),
 											ACL_INSERT);
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
 							RelationGetRelationName(rel));
-#if (PG_VERSION_NUM >= 120000)
-			table_close(rel, NoLock);
-#else
-			heap_close(rel, NoLock);
-#endif
+			table_close(rel, AccessShareLock);
 
 			/* generate the full error message to log */
 			initStringInfo(&msg);

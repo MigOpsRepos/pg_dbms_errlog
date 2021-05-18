@@ -72,8 +72,6 @@ SET SESSION AUTHORIZATION DEFAULT;
 -- Allow user pel_u1 to write to ERR$_t2
 GRANT ALL ON "ERR$_t2" TO pel_u1;
 
-\c - -
-
 -- switch back to test privilege user
 SET SESSION AUTHORIZATION 'pel_u1';
 

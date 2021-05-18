@@ -15,6 +15,7 @@
 #include "utils/dsa.h"
 
 #if PG_VERSION_NUM < 120000
+#define table_open(r,l)		heap_open(r,l)
 #define table_openrv(r,l)	heap_openrv(r,l)
 #define table_close(r,l)	heap_close(r,l)
 #endif
