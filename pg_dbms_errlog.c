@@ -139,7 +139,6 @@ char *lookupCachedPrepared(const char *preparedName);
 void removeCachedPrepared(const char *localPreparedName);
 static void pel_setupCachedPreparedHash(void);
 void putCachedPrepared(const char *preparedName, const char *preparedStmt);
-void pel_unregister_errlog_table(Oid relid);
 char *get_relation_name(Oid relid);
 void generate_error_message (ErrorData *edata, StringInfoData *buf);
 void append_with_tabs(StringInfo buf, const char *str);
@@ -552,87 +551,6 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 		else if (stmt->kind == TRANS_STMT_ROLLBACK)
 			pel_discard_queue();
 	}
-}
-
-void
-pel_unregister_errlog_table(Oid relid)
-{
-	RangeVar     *rv;
-	Relation      rel;
-	ScanKeyData   key[1];
-	SysScanDesc   scan;
-	HeapTuple     tuple;
-	bool          found = false;
-	bool need_priv_escalation = !superuser(); /* we might be a SU */
-	Oid  save_userid;
-	int  save_sec_context;
-
-	elog(DEBUG1, "Looking for registered error logging table with relid = %d", relid);
-
-	/* Inserting error to log table must be created as SU */
-	if (need_priv_escalation)
-	{
-		/* Get current user's Oid and security context */
-		GetUserIdAndSecContext(&save_userid, &save_sec_context);
-		/* Become superuser */
-		SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, save_sec_context
-							| SECURITY_LOCAL_USERID_CHANGE
-							| SECURITY_RESTRICTED_OPERATION);
-	}
-
-	/* Set and open the error log registration relation */
-	rv = makeRangeVar(PEL_NAMESPACE_NAME, PEL_REGISTRATION_TABLE, -1);
-	rel = table_openrv(rv, RowExclusiveLock);
-
-	/* Define scanning */
-	ScanKeyInit(&key[0], Anum_pel_relid, BTEqualStrategyNumber, F_OIDEQ, ObjectIdGetDatum(relid));
-
-	/* Start search of relation */
-	scan = systable_beginscan(rel, 0, true, NULL, 1, key);
-	/* Remove the tuples. */
-	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
-	{
-		elog(DEBUG1, "removing tuple with relid = %d", relid);
-		simple_heap_delete(rel, &tuple->t_self);
-		found = true;
-	}
-	/* Cleanup. */
-	systable_endscan(scan);
-	table_close(rel, RowExclusiveLock);
-
-	/*
-	 * we have not found a registered relation as regular table,
-	 * look for an error table now
-	 */
-	if (!found)
-	{
-		elog(DEBUG1, "Not found looking if relid %d is registered as an error logging table", relid);
-
-		/* Set and open the pg_dbms_errlog registration relation */
-		rv = makeRangeVar(PEL_NAMESPACE_NAME, PEL_REGISTRATION_TABLE, -1);
-		rel = table_openrv(rv, RowExclusiveLock);
-
-		/* Define scanning */
-		ScanKeyInit(&key[0], Anum_pel_errlogid, BTEqualStrategyNumber, F_OIDEQ, ObjectIdGetDatum(relid));
-
-		/* Start search of relation */
-		scan = systable_beginscan(rel, 0, true, NULL, 1, key);
-		/* Remove the tuples. */
-		while (HeapTupleIsValid(tuple = systable_getnext(scan)))
-		{
-			elog(DEBUG1, "removing tuple with errlogid = %d", relid);
-			simple_heap_delete(rel, &tuple->t_self);
-			found = true;
-		}
-		/* Cleanup. */
-		systable_endscan(scan);
-		table_close(rel, RowExclusiveLock);
-	}
-
-	/* Restore user's privileges */
-	if (need_priv_escalation)
-		SetUserIdAndSecContext(save_userid, save_sec_context);
-
 }
 
 static void
