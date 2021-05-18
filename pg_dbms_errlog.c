@@ -556,34 +556,37 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 static void
 pel_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
-	if (pel_enabled && queryDesc->dest->mydest != DestSPI)
+	if (pel_enabled)
 	{
-		if (queryDesc->operation == CMD_INSERT)
-			current_dml_kind = 'I';
-		else if (queryDesc->operation == CMD_UPDATE)
-			current_dml_kind = 'U';
-		else if (queryDesc->operation == CMD_DELETE)
-			current_dml_kind = 'D';
-		else
-			current_dml_kind = '?';
-	}
-
-	if (exec_nested_level == 0)
-	{
-		pel_done = false;
-		if (current_bind_parameters != NULL)
+		if (queryDesc->dest->mydest != DestSPI)
 		{
-			pfree(current_bind_parameters);
-			current_bind_parameters = NULL;
+			if (queryDesc->operation == CMD_INSERT)
+				current_dml_kind = 'I';
+			else if (queryDesc->operation == CMD_UPDATE)
+				current_dml_kind = 'U';
+			else if (queryDesc->operation == CMD_DELETE)
+				current_dml_kind = 'D';
+			else
+				current_dml_kind = '?';
 		}
-	}
 
-	if (!pel_done)
-	{
-		if (queryDesc->params && queryDesc->params->numParams > 0)
-			current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, -1);
-		else
-			current_bind_parameters = NULL;
+		if (exec_nested_level == 0)
+		{
+			pel_done = false;
+			if (current_bind_parameters != NULL)
+			{
+				pfree(current_bind_parameters);
+				current_bind_parameters = NULL;
+			}
+		}
+
+		if (!pel_done)
+		{
+			if (queryDesc->params && queryDesc->params->numParams > 0)
+				current_bind_parameters = BuildParamLogString(queryDesc->params, NULL, -1);
+			else
+				current_bind_parameters = NULL;
+		}
 	}
 
 	if (prev_ExecutorStart)
@@ -645,7 +648,7 @@ pel_ExecutorFinish(QueryDesc *queryDesc)
 static void
 pel_ExecutorEnd(QueryDesc *queryDesc)
 {
-	if (exec_nested_level == 0)
+	if (pel_enabled && exec_nested_level == 0)
 	{
 		if (current_bind_parameters != NULL)
 		{
@@ -666,16 +669,17 @@ pel_ExecutorEnd(QueryDesc *queryDesc)
 static void
 pel_log_error(ErrorData *edata)
 {
-	/* Only process errors */
-	if (!edata || edata->elevel != ERROR)
+	if (!pel_enabled
+		|| !edata || edata->elevel != ERROR /* Only process errors */
+		|| !debug_query_string /* Ignore errors raised from non-backend processes */
+		|| edata->sqlerrcode == ERRCODE_SUCCESSFUL_COMPLETION
+		)
+	{
+		/* Continue chain to previous hook */
+		if (prev_emit_log_hook)
+			(*prev_emit_log_hook) (edata);
 		return;
-
-	/* Ignore errors raised from non-backend processes */
-	if (!debug_query_string)
-		return;
-
-	if (edata->sqlerrcode == ERRCODE_SUCCESSFUL_COMPLETION)
-		return;
+	}
 
 	if (!pel_done)
 	{
@@ -896,6 +900,10 @@ pel_log_error(ErrorData *edata)
 			edata->output_to_client = false;
 	}
 	pel_done = false;
+
+	/* Continue chain to previous hook */
+	if (prev_emit_log_hook)
+		(*prev_emit_log_hook) (edata);
 }
 
 static Size
