@@ -97,6 +97,31 @@ pelSharedState *pel = NULL;
 dsa_area *pel_area = NULL;
 
 /* GUC variables */
+
+typedef enum
+{
+	PEL_SYNC_OFF,				/* never wait for queued errors processing */
+	PEL_SYNC_QUERY,				/* wait for every error */
+	PEL_SYNC_XACT				/* wait at the end of the xact (implicit or not) */
+}			pelSyncLevel;
+
+static const struct config_enum_entry pel_sync_options[] =
+{
+	{"off", PEL_SYNC_OFF, false},
+	{"query", PEL_SYNC_QUERY, false},
+	{"transaction", PEL_SYNC_XACT, false},
+	{NULL, 0, false}
+};
+
+#define PEL_SYNC_ON_QUERY()	(pel_synchronous == PEL_SYNC_QUERY || \
+		(pel_synchronous == PEL_SYNC_XACT && !IsTransactionBlock()))
+/*
+ * We also have to wait for completion if level is PEL_SYNC_QUERY and we're in
+ * a transaction block, as it could have be raised from PEL_SYNC_OFF just
+ * before a COMMIT, which should force a sync
+ */
+#define PEL_SYNC_ON_XACT()	(pel_synchronous == PEL_SYNC_XACT || \
+		(pel_synchronous == PEL_SYNC_QUERY && IsTransactionBlock()))
 bool pel_debug = false;
 bool pel_done = false;
 bool pel_enabled = false;
@@ -104,7 +129,7 @@ int pel_frequency = 60;
 int pel_max_workers = 1;
 int  reject_limit = 0;
 char *query_tag = NULL;
-bool pel_synchronous = false;
+int pel_synchronous = PEL_SYNC_XACT;
 bool pel_no_client_error = true;
 
 /* global variable used to store DML table name */
@@ -341,11 +366,12 @@ _PG_init(void)
 				NULL,
 				NULL );
 
-	DefineCustomBoolVariable("pg_dbms_errlog.synchronous",
+	DefineCustomEnumVariable("pg_dbms_errlog.synchronous",
 				"Wait for error queue completion when an error happens",
 				NULL,
 				&pel_synchronous,
-				false,
+				PEL_SYNC_XACT,
+				pel_sync_options,
 				PGC_USERSET,
 				0,
 				NULL,
@@ -542,7 +568,7 @@ pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO)
 
 			if (is_commit)
 			{
-				if (pel_publish_queue(pel_synchronous) == PEL_PUBLISH_ERROR)
+				if (pel_publish_queue(PEL_SYNC_ON_XACT()) == PEL_PUBLISH_ERROR)
 					elog(WARNING, "could not publish the queue");
 			}
 			else
@@ -882,7 +908,7 @@ pel_log_error(ErrorData *edata)
 					query_tag,
 					sql,
 					msg.data,
-					pel_synchronous);
+					PEL_SYNC_ON_QUERY());
 			if (!ok)
 				ereport(ERROR, (errmsg("could not queue error detail")));
 

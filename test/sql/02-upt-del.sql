@@ -1,5 +1,5 @@
 LOAD 'pg_dbms_errlog';
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 
 -- Create the error log table for relation t1 in a dedicated schema
 CREATE SCHEMA testerrlog;
