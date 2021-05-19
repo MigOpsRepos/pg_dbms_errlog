@@ -142,6 +142,43 @@ SELECT 1 AS exp, count(*) FROM "ERR$_t1";
 
 RESET pg_dbms_errlog.frequency;
 
+TRUNCATE "ERR$_t1";
+
+-- test reject_limit
+SET pg_dbms_errlog.reject_limit TO 0;
+-- there shouldn't be any queue created
+SELECT * FROM dbms_errlog.queue_size();
+BEGIN;
+SAVEPOINT aze;
+-- should fail complaining that nothing can be queue
+INSERT INTO t1 VALUES ('queue 10');
+ROLLBACK TO aze;
+-- the error should not have been published or processed
+SELECT 0 AS exp, count(*) FROM "ERR$_t1";
+-- there shouldn't be any queue created
+SELECT * FROM dbms_errlog.queue_size();
+COMMIT;
+-- the error should not have been published or processed
+SELECT 0 AS exp, count(*) FROM "ERR$_t1";
+
+SET pg_dbms_errlog.reject_limit TO 1;
+BEGIN;
+SAVEPOINT aze;
+INSERT INTO t1 VALUES ('queue 11a');
+ROLLBACK TO aze;
+-- the error should not have been published or processed
+SELECT 0 AS exp, count(*) FROM "ERR$_t1";
+-- there should be 1 queued item
+SELECT 1 AS exp, * FROM dbms_errlog.queue_size();
+-- should fail complaining that reject_limit has been reached
+INSERT INTO t1 VALUES ('queue 11b');
+ROLLBACK TO aze;
+-- the queue should have been discarded
+SELECT * FROM dbms_errlog.queue_size();
+COMMIT;
+-- the error should not have been published or processed
+SELECT 0 AS exp, count(*) FROM "ERR$_t1";
+
 -- Dropping one of the table
 BEGIN;
 DROP TABLE "ERR$_t1";

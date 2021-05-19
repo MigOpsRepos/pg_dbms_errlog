@@ -22,6 +22,7 @@
 #include "catalog/pg_namespace.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -127,7 +128,7 @@ bool pel_done = false;
 bool pel_enabled = false;
 int pel_frequency = 60;
 int pel_max_workers = 1;
-int  reject_limit = 0;
+int  pel_reject_limit = 0;
 char *query_tag = NULL;
 int pel_synchronous = PEL_SYNC_XACT;
 bool pel_no_client_error = true;
@@ -149,6 +150,8 @@ void        _PG_fini(void);
 
 extern PGDLLEXPORT Datum pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(pg_dbms_errlog_publish_queue);
+extern PGDLLEXPORT Datum pg_dbms_errlog_queue_size(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(pg_dbms_errlog_queue_size);
 
 static void pel_shmem_startup(void);
 static void pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO);
@@ -339,11 +342,11 @@ _PG_init(void)
 
 	DefineCustomIntVariable("pg_dbms_errlog.reject_limit",
 				"Maximum number of errors that can be encountered before the DML"
-			       	" statement terminates and rolls back. A value of -1 mean unlimited."
+				" statement terminates and rolls back. A value of -1 mean unlimited."
 				" The default reject limit is zero, which means that upon encountering"
 				" the first error, the error is logged and the statement rolls back.",
 				NULL,
-				&reject_limit,
+				&pel_reject_limit,
 				0,
 				-1,
 				INT_MAX,
@@ -460,6 +463,17 @@ pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS)
 	pos = pel_publish_queue(sync);
 
 	PG_RETURN_BOOL(pos != PEL_PUBLISH_ERROR);
+}
+
+PGDLLEXPORT Datum
+pg_dbms_errlog_queue_size(PG_FUNCTION_ARGS)
+{
+	int num = pel_queue_size();
+
+	if (num == -1)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_INT32(num);
 }
 
 static void
@@ -910,7 +924,7 @@ pel_log_error(ErrorData *edata)
 					msg.data,
 					PEL_SYNC_ON_QUERY());
 			if (!ok)
-				ereport(ERROR, (errmsg("could not queue error detail")));
+				return;
 
 			elog(DEBUG1, "pel_log_error(): ERRCODE: %s;KIND: %c,TAG: %s;MESSAGE: %s;QUERY: %s;TABLE: %s; INFO: %s",
 								unpack_sql_state(edata->sqlerrcode),

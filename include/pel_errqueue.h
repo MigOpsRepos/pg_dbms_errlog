@@ -48,5 +48,6 @@ bool pel_queue_error(Oid err_relid, int sqlstate, char *errmessage,
 		const char *detail, bool sync);
 void pel_discard_queue(void);
 int pel_publish_queue(bool async);
+int pel_queue_size(void);
 
 #endif
