@@ -1,5 +1,5 @@
 LOAD 'pg_dbms_errlog';
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 
 -- Create the error log table for relation t1
 CALL dbms_errlog.create_error_log('t1');
@@ -68,8 +68,8 @@ BEGIN;
 SAVEPOINT aze;
 INSERT INTO t1 VALUES ('queue 3');
 ROLLBACK TO aze;
-SET pg_dbms_errlog.synchronous = on;
--- commit should publish the queue
+SET pg_dbms_errlog.synchronous = query;
+-- commit should publish the queue even in query level sync
 COMMIT;
 SELECT 1 AS exp, count(*) FROM "ERR$_t1";
 
@@ -102,7 +102,7 @@ BEGIN;
 SAVEPOINT aze;
 INSERT INTO t1 VALUES ('queue 6');
 ROLLBACK TO aze;
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 COMMIT;
 SELECT 2 AS exp, count(*) FROM "ERR$_t1";
 
@@ -126,6 +126,20 @@ COMMIT;
 SELECT 0 AS exp, count(*) FROM "ERR$_t1";
 SELECT dbms_errlog.publish_queue(true);
 SELECT 2 AS exp, count(*) FROM "ERR$_t1";
+
+TRUNCATE "ERR$_t1";
+
+-- test transaction level sync
+SET pg_dbms_errlog.synchronous = transaction;
+BEGIN;
+SAVEPOINT aze;
+INSERT INTO t1 VALUES ('queue 9');
+ROLLBACK TO aze;
+-- the error should not have been published or processed
+SELECT 0 AS exp, count(*) FROM "ERR$_t1";
+-- commit should publish the error and wait for the result
+COMMIT;
+SELECT 1 AS exp, count(*) FROM "ERR$_t1";
 
 RESET pg_dbms_errlog.frequency;
 

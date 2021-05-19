@@ -9,7 +9,7 @@
 ----------------------------------------------------------------
 
 -- Set error log behavior for this DML batch
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 SET pg_dbms_errlog.query_tag TO 'daily_load1';
 SET pg_dbms_errlog.reject_limit TO 25;
 SET pg_dbms_errlog.enabled TO true;
@@ -48,7 +48,7 @@ DELETE FROM "ERR$_t2";
 SET SESSION AUTHORIZATION 'pel_u1';
 
 -- Set error log behavior for this DML batch
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 SET pg_dbms_errlog.query_tag TO 'daily_load2';
 SET pg_dbms_errlog.reject_limit TO 25;
 SET pg_dbms_errlog.enabled TO true;
@@ -75,7 +75,7 @@ GRANT ALL ON "ERR$_t2" TO pel_u1;
 -- switch back to test privilege user
 SET SESSION AUTHORIZATION 'pel_u1';
 
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 SET pg_dbms_errlog.query_tag TO 'daily_load3';
 SET pg_dbms_errlog.reject_limit TO 25;
 SET pg_dbms_errlog.enabled TO true;
@@ -123,7 +123,7 @@ GRANT ALL ON dbms_errlog.register_errlog_tables TO pel_u1;
 
 SET SESSION AUTHORIZATION 'pel_u1';
 
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 SET pg_dbms_errlog.query_tag TO 'daily_load4';
 SET pg_dbms_errlog.reject_limit TO 25;
 SET pg_dbms_errlog.enabled TO true;

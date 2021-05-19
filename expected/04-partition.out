@@ -1,5 +1,5 @@
 LOAD 'pg_dbms_errlog';
-SET pg_dbms_errlog.synchronous = on;
+SET pg_dbms_errlog.synchronous = query;
 CREATE TABLE measurement (
     city_id         int not null,
     logdate         date not null,
