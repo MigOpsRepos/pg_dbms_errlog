@@ -206,6 +206,13 @@ pel_prepare_entry(void)
 
 	if (local_data.pentry == InvalidDsaPointer)
 	{
+		if (pel_reject_limit == 0)
+		{
+			elog(WARNING, "pg_dbms_errlog.reject_limit is set to 0, no error"
+						  " is handled");
+			return false;
+		}
+
 		local_data.pentry = dsa_allocate_extended(local_data.area, sizeof(pelQueueEntry),
 				DSA_ALLOC_ZERO | DSA_ALLOC_NO_OOM);
 
@@ -219,6 +226,14 @@ pel_prepare_entry(void)
 	}
 
 	local_data.entry = dsa_get_address(local_data.area, local_data.pentry);
+
+	if (local_data.entry->max_entries >= pel_reject_limit )
+	{
+		elog(WARNING, "pg_dbms_errlog.reject_limit is reached, no further"
+					  " error is handled");
+		pel_cleanup_local();
+		return false;
+	}
 
 	/* init or grow the entry if needed */
 	if (local_data.entry->max_entries == 0 ||
@@ -374,7 +389,11 @@ pel_publish_queue(bool sync)
 
 	/* bail out if nothing is queued */
 	if (local_data.entry->num_entries == 0)
+	{
+		LWLockRelease(pel->lock);
+		pel_cleanup_local();
 		goto error;
+	}
 
 	/* check if there's enough room to store the entry */
 	if (pel->cur_err != pel->bgw_err)
@@ -525,6 +544,14 @@ error:
 	elog(PEL_DEBUG, "pel_publish_queue(): error, returning invalid pos %d", PEL_PUBLISH_ERROR);
 	local_data.last_pos = -1;
 	return PEL_PUBLISH_ERROR;
+}
+
+int pel_queue_size(void)
+{
+	if(local_data.pentry == InvalidDsaPointer)
+		return -1;
+
+	return local_data.entry->num_entries;
 }
 
 Oid
@@ -708,7 +735,8 @@ pel_queue_error(Oid err_relid, int sqlstate, char *errmessage, char cmdtype,
 	Assert(errmessage != NULL);
 	Assert(sql != NULL);
 
-	pel_prepare_entry();
+	if (!pel_prepare_entry())
+		return false;
 
 	Assert(local_data.area != NULL);
 

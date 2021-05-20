@@ -52,5 +52,6 @@ extern dsa_area *pel_area;
 extern bool pel_debug;
 extern int pel_frequency;
 extern int pel_max_workers;
+extern int pel_reject_limit;
 
 #endif

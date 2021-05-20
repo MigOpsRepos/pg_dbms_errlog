@@ -96,4 +96,11 @@ LANGUAGE C COST 1000
 AS '$libdir/pg_dbms_errlog', 'pg_dbms_errlog_publish_queue';
 REVOKE ALL ON FUNCTION @extschema@.publish_queue FROM public;
 
+CREATE OR REPLACE FUNCTION @extschema@.queue_size(
+    OUT num_errors integer
+) RETURNS integer
+LANGUAGE C COST 1000
+AS '$libdir/pg_dbms_errlog', 'pg_dbms_errlog_queue_size';
+GRANT ALL ON FUNCTION @extschema@.queue_size TO public;
+
 CREATE EVENT TRIGGER ddl_drop_errlog_table ON sql_drop EXECUTE PROCEDURE @extschema@.unregister_errlog_table();

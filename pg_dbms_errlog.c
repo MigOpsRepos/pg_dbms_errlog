@@ -22,6 +22,7 @@
 #include "catalog/pg_namespace.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -127,7 +128,7 @@ bool pel_done = false;
 bool pel_enabled = false;
 int pel_frequency = 60;
 int pel_max_workers = 1;
-int  reject_limit = 0;
+int  pel_reject_limit = 0;
 char *query_tag = NULL;
 int pel_synchronous = PEL_SYNC_XACT;
 bool pel_no_client_error = true;
@@ -149,6 +150,8 @@ void        _PG_fini(void);
 
 extern PGDLLEXPORT Datum pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(pg_dbms_errlog_publish_queue);
+extern PGDLLEXPORT Datum pg_dbms_errlog_queue_size(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(pg_dbms_errlog_queue_size);
 
 static void pel_shmem_startup(void);
 static void pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO);
@@ -339,11 +342,11 @@ _PG_init(void)
 
 	DefineCustomIntVariable("pg_dbms_errlog.reject_limit",
 				"Maximum number of errors that can be encountered before the DML"
-			       	" statement terminates and rolls back. A value of -1 mean unlimited."
+				" statement terminates and rolls back. A value of -1 mean unlimited."
 				" The default reject limit is zero, which means that upon encountering"
 				" the first error, the error is logged and the statement rolls back.",
 				NULL,
-				&reject_limit,
+				&pel_reject_limit,
 				0,
 				-1,
 				INT_MAX,
@@ -460,6 +463,17 @@ pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS)
 	pos = pel_publish_queue(sync);
 
 	PG_RETURN_BOOL(pos != PEL_PUBLISH_ERROR);
+}
+
+PGDLLEXPORT Datum
+pg_dbms_errlog_queue_size(PG_FUNCTION_ARGS)
+{
+	int num = pel_queue_size();
+
+	if (num == -1)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_INT32(num);
 }
 
 static void
@@ -701,10 +715,7 @@ pel_log_error(ErrorData *edata)
 		|| edata->sqlerrcode == ERRCODE_SUCCESSFUL_COMPLETION
 		)
 	{
-		/* Continue chain to previous hook */
-		if (prev_emit_log_hook)
-			(*prev_emit_log_hook) (edata);
-		return;
+		goto prev_hook;
 	}
 
 	if (!pel_done)
@@ -735,7 +746,10 @@ pel_log_error(ErrorData *edata)
 		MemoryContextDelete(pelcontext);
 
 		if (list_length(stmts) != 1)
-			elog(ERROR, "pel_log_error(): not supported");
+		{
+			elog(WARNING, "pel_log_error(): not supported");
+			goto prev_hook;
+		}
 		raw = (RawStmt *) linitial(stmts);
 		stmt = raw->stmt;
 
@@ -750,7 +764,10 @@ pel_log_error(ErrorData *edata)
 #endif
 
 			if (list_length(stmts) != 1)
-				elog(ERROR, "not supported");
+			{
+				elog(WARNING, "not supported");
+				goto prev_hook;
+			}
  
 			raw = (RawStmt *) linitial(stmts);
 			Assert(IsA(raw->stmt, PrepareStmt));
@@ -783,7 +800,7 @@ pel_log_error(ErrorData *edata)
 		if (cmdType == CMD_UNKNOWN)
 		{
 			/* Unhandled DML, bail out */
-			return;
+			goto prev_hook;
 		}
 		else
 		{
@@ -801,7 +818,7 @@ pel_log_error(ErrorData *edata)
 			else
 				elog(WARNING, "could not find an oid for relation \"%s\"",
 						rv->relname);
-			return;
+			goto prev_hook;
 		}
 
 		elog(DEBUG1, "pel_log_error(): OPERATION: %s, KIND: %c, RELID: %u", operation, current_dml_kind, relid);
@@ -836,10 +853,10 @@ pel_log_error(ErrorData *edata)
 			rc = SPI_connect();
 			if (rc != SPI_OK_CONNECT)
 			{
-				ereport(ERROR,
-						(errmsg("Can not connect to SPI manager to retrieve"
-								" error log table for \"%s\", rc=%d. ",
-								rv->relname, rc)));
+				elog(WARNING, "Can not connect to SPI manager to retrieve"
+							  " error log table for \"%s\", rc=%d. ",
+					rv->relname, rc);
+				goto prev_hook;
 			}
 
 			appendStringInfo(&relstmt, "SELECT e.relerrlog"
@@ -852,9 +869,9 @@ pel_log_error(ErrorData *edata)
 			rc = SPI_exec(relstmt.data, 0);
 			if (rc != SPI_OK_SELECT || SPI_processed != 1)
 			{
-				ereport(ERROR,
-						(errmsg("SPI execution failure (rc=%d) on query: %s",
-								rc, relstmt.data)));
+				elog(WARNING, "SPI execution failure (rc=%d) on query: %s",
+					 rc, relstmt.data);
+				goto prev_hook;
 			}
 
 			logtable = DatumGetObjectId(SPI_getbinval(SPI_tuptable->vals[0],
@@ -863,14 +880,17 @@ pel_log_error(ErrorData *edata)
 										&isnull));
 			if (isnull)
 			{
-				ereport(ERROR,
-						(errmsg("can not get error logging table for table %s",
-						 relstmt.data)));
+				elog(WARNING, "can not get error logging table for table %s",
+					 relstmt.data);
+				goto prev_hook;
 			}
 
 			rc = SPI_finish();
 			if (rc != SPI_OK_FINISH)
-				ereport(ERROR, (errmsg("could not disconnect from SPI manager")));
+			{
+				elog(WARNING, "could not disconnect from SPI manager");
+				goto prev_hook;
+			}
 
 			/* Restore user's privileges */
 			if (need_priv_escalation)
@@ -895,9 +915,6 @@ pel_log_error(ErrorData *edata)
 			{
 				appendStringInfo(&msg, "PARAMETERS: %s",
 								 current_bind_parameters);
-
-				pfree(current_bind_parameters);
-				current_bind_parameters = NULL;
 			}
 
 			/* Queue the error information. */
@@ -910,7 +927,7 @@ pel_log_error(ErrorData *edata)
 					msg.data,
 					PEL_SYNC_ON_QUERY());
 			if (!ok)
-				ereport(ERROR, (errmsg("could not queue error detail")));
+				goto prev_hook;
 
 			elog(DEBUG1, "pel_log_error(): ERRCODE: %s;KIND: %c,TAG: %s;MESSAGE: %s;QUERY: %s;TABLE: %s; INFO: %s",
 								unpack_sql_state(edata->sqlerrcode),
@@ -926,6 +943,13 @@ pel_log_error(ErrorData *edata)
 			edata->output_to_client = false;
 	}
 	pel_done = false;
+
+prev_hook:
+	if (current_bind_parameters != NULL)
+	{
+		pfree(current_bind_parameters);
+		current_bind_parameters = NULL;
+	}
 
 	/* Continue chain to previous hook */
 	if (prev_emit_log_hook)

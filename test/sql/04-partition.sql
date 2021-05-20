@@ -1,4 +1,3 @@
-LOAD 'pg_dbms_errlog';
 SET pg_dbms_errlog.synchronous = query;
 
 CREATE TABLE measurement (
