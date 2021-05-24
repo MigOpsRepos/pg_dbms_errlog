@@ -1,11 +1,12 @@
 /*-------------------------------------------------------------------------
  *
- * pel_worker.h: Implementation of bgworker for error queue processing.
+ * pel_worker.h:
+ * 	Implementation of bgworker for error queue processing.
  *
  * This program is open source, licensed under the PostgreSQL license.
  * For license terms, see the LICENSE file.
  *
- * Copyright (C) 2021: ???
+ * Copyright (C) 2021: MigOps Inc
  *
  *-------------------------------------------------------------------------
  */

@@ -1,10 +1,17 @@
 /*-------------------------------------------------------------------------
  *
- * pg_dbms_errlog.c
- *	pg_dbms_errlog is a PostgreSQL extension that logs each failing DML query.
- *	It emulates the DBMS_ERRLOG Oracle module.
+ * pg_dbms_errlog.c:
+ * 	pg_dbms_errlog is a PostgreSQL extension that logs each failing DML
+ * 	query. It emulates the DBMS_ERRLOG Oracle module.
+ *
+ * This program is open source, licensed under the PostgreSQL license.
+ * For license terms, see the LICENSE file.
+ *
+ * Copyright (C) 2021: MigOps Inc
+ *
  *-------------------------------------------------------------------------
  */
+
 #include "postgres.h"
 
 #include "access/genam.h"

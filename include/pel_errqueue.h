@@ -1,11 +1,12 @@
 /*-------------------------------------------------------------------------
  *
- * pel_errrqueue.h: Implementation of error logging queue in dynshm.
+ * pel_errrqueue.h:
+ * 	Implementation of error logging queue in dynshm.
  *
  * This program is open source, licensed under the PostgreSQL license.
  * For license terms, see the LICENSE file.
  *
- * Copyright (C) 2021: ???
+ * Copyright (C) 2021: MigOps Inc
  *
  *-------------------------------------------------------------------------
  */
