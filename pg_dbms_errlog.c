@@ -13,9 +13,9 @@
 #include "access/table.h"
 #else
 /* for imported functions */
-#include "access/xact.h"
 #include "mb/pg_wchar.h"
 #endif
+#include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
