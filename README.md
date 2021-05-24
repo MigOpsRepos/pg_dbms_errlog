@@ -19,10 +19,19 @@ create an error logging table so that DML operations can continue after
 encountering errors rather than abort and roll back. It requires the use of
 the pg_statement_rollback extension or to fully manage the SAVEPOINT in the
 DML script. Logging in the corresponding error table is done using dynamic
-background workers. Note that `max_worker_processes` must be high enough to
-support the pg_dbms_errlog extension, as it will launch up to
-`pg_dbms_errlog.max_workers` dynamic background workers, plus an additional
-fixed background worker.
+shared memory for error queuing and a background worker to write the errors
+queued into the corresponding error log tables. Note that configuration setting
+`max_worker_processes` must be high enough to support the extension, as it will
+launch up to `pg_dbms_errlog.max_workers` dynamic background workers, plus an
+additional fixed background worker.
+
+Error logging can be done synchronously by registering the error at query
+level or when the transaction ends using GUC `pg_dbms_errlog.synchronous`.
+Logging at transaction is the default and must be preferred to query, it is
+the mode that can guarantee that only errors on a committed transaction will
+be logged. When synchronous logging is disabled `off` error logging is done
+when the bg_worker wakes up or when function `dbms_errlog.publish_queue()`
+is called or that the synchronous level is changed.
 
 * [Installation](#installation)
 
@@ -37,7 +46,7 @@ Once `pg_config` is in your path, do
     sudo make install
 
 Configure the extension in `shared_preload_libraries`.  For instance in a
-vanille **postgresql.conf**::
+vanilla **postgresql.conf**::
 
     shared_preload_libraries = 'pg_dbms_errlog'
 
@@ -53,43 +62,48 @@ To run test execute the following command as superuser:
 
 Enable/disable log of failing queries. Default disabled.
 
-- *pg_dbms_errlog.frequency*
-
-Amount of time the background worker will sleep before checking for unprocessed
-errors, which only happens if pg_dbms_errlog.synchronous is disabled. Default
-is 60s.
-
 - *pg_dbms_errlog.query_tag*
 
 Tag (a numeric or string literal in parentheses) that gets added to the error
 log to help identify the statement that caused the errors. If the tag is
 omitted, a NULL value is used.
 
-- *pg_dbms_errlog.max_workers*
-
-Number of dynamic background workers that can be launched simultaneously.  Note
-that for now it can only happen on different databases.  Default is 1.
-
 - *pg_dbms_errlog.reject_limit*
 
 Maximum number of errors that can be encountered before the DML statement
-terminates and rolls back. A value of -1 mean unlimited. The default reject
-limit is zero, which means that upon encountering the first error, the error
-is logged and the statement rolls back. FIXME: not supported yet.
+terminates and rolls back. A value of -1 mean unlimited, this is the default.
+When reject limit is zero no error is logged and the statement rolls back.
+Unlike Oracle which apply this limit per DML statement, the extension use
+this limit for the whole DML transaction.
 
 - *pg_dbms_errlog.synchronous*
 
-Wait for error processing completion when an error happens or when the
-transaction ends.  Default enabled. Asynchronous logging is discouraged as you
-can loose some error messages when the script ends unless you wait enough time
-at end of the script to wait for all asynchronous insert to be effective.
+Wait for error processing completion when an error happens (`query`) or when the
+transaction ends (`transaction`). Default value is `transaction`. When synchronous
+logging is disabled (`off`) error logging is done when the bg_worker wakes up or
+when function `dbms_errlog.publish_queue()` is called or that the synchronous level
+is changed.
 
 - *pg_dbms_errlog.no_client_error*
 
 Enable/disable client error logging. Enable by default, the error messages
-logged will not be sent to the client but still looged on server side. This
+logged will not be sent to the client but still logged on server side. This
 correspond to the Oracle behavior.
 
+- *pg_dbms_errlog.debug*
+
+Enable/disable debug traces.
+
+- *pg_dbms_errlog.frequency*
+
+Amount of time the background worker will sleep before checking for unprocessed
+errors, which only happens if `pg_dbms_errlog.synchronous` is disabled. Default
+is 60s.
+
+- *pg_dbms_errlog.max_workers*
+
+Number of dynamic background workers that can be launched simultaneously.  Note
+that for now it can only happen on different databases.  Default is 1.
 
 ### [Use of the extension](#use-of-the-extension)
 
@@ -125,7 +139,11 @@ This correspond to the [Oracle CREATE_ERROR_LOG Procedure](https://docs.oracle.c
 parameter `skip_unsupported` because we don't have such limitation with the
 current design of the extension. The pg_dbms_errlog extension doesn't copy
 the DML data into a dedicated column but it logs the whole query and error
-details in two text columns.
+details in two text columns. An other different behavior is the reject limit
+setting. With Oracle setting a limit to 0 means that the error is logged and
+the statement is rolled back. In this extension 0 mean, no log at all, the
+limit correspond to the number of error that will be logged in the full
+transaction, not just for the DML statement like in Oracle.
 
 - Example 1:
 ```
@@ -173,8 +191,15 @@ gilles=# \d "ERRORS"."ERR$_EMPTABLE"
 A user must be granted the DML privileges to the table and to the error log
 table to be able to use this feature. Insert to the registration table is done
 internally by superuser. To allow a user to create an error logging table he
-must be granted to execute the create_error_log() function and have read/write
-access to the registration table dbms_errlog.register_errlog_tables.
+must be granted to execute the `create_error_log()` function and have read/write
+access to the registration table `dbms_errlog.register_errlog_tables`.
+
+When function `dbms_errlog.publish_queue()` is called or that the synchronous
+When synchronous logging is disabled errors can be logged at any moment calling
+function `dbms_errlog.publish_queue()`. Otherwise they will be logged according
+to the synchronous level or when the background worker will wake up following
+the frequency.
+
 
 ### [Limitations](#limitation)
 
@@ -186,9 +211,9 @@ Expect changes on this part in further version, having a dedicated log column
 per column's data to give the exact same behavior as Oracle implementation.
 
 The form `INSERT INTO <tablename> SELECT ...` will not have the same behavior
-than in Oracle. It will not stored the succesfull insert and looged the rows
+than in Oracle. It will not stored the successful insert and logged the rows
 in error. This is not supported because it is a single transaction for PostgreSQL
-and everything is rollbacked in case of error. But the erro
+and everything is rolled back in case of error.
 
 
 ### [Which errors are logged](#which-errors-are-logged)?
@@ -208,7 +233,7 @@ populate the raises table with data from the employees table. One of the
 inserts violates the check constraint on raises, and that row can be seen
 in associated error log table.
 
-FIXME: If more than ten errors had occurred, then the statement would have
+If more than ten errors had occurred, then the statement would have
 aborted, rolling back any insertions made.
 
 ```
@@ -264,7 +289,7 @@ pg_err_detail$ | ERROR:  23514: new row for relation "raises" violates check con
 ```
 
 The following settings are equivalent to a Oracle DML clause
-`LOG ERRORS INTO errlog ('query tag') REJECT LIMIT 10`.
+`LOG ERRORS INTO ERR$_raises ('daily_log') REJECT LIMIT 10`.
 
 ```
 SET pg_dbms_errlog.enabled TO on;
@@ -272,8 +297,9 @@ SET pg_dbms_errlog.query_tag TO 'daily_log';
 SET pg_dbms_errlog.reject_limit TO 10;
 ```
 
-The destination error log table (here `errlog`) is found automatically by the
-extension regarding the table where the DML is acting.
+You don't need to precise the destination error log table (here `ERR$_raises`)
+it is found automatically by the extension regarding the table where the DML is
+acting.
 
 A more complex DML script to demonstrate the use based on the example above:
 ```
