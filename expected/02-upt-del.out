@@ -10,7 +10,7 @@ SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
 
 -- Set error log behavior for this DML batch
 SET pg_dbms_errlog.query_tag TO 'daily_load';
-SET pg_dbms_errlog.reject_limit TO 25;
+SET pg_dbms_errlog.reject_limit TO -1;
 SET pg_dbms_errlog.enabled TO true;
 -- Start a transaction
 BEGIN;

@@ -228,7 +228,8 @@ pel_prepare_entry(void)
 
 	local_data.entry = dsa_get_address(local_data.area, local_data.pentry);
 
-	if (local_data.entry->max_entries >= pel_reject_limit )
+	if (pel_reject_limit > -1 &&
+			local_data.entry->max_entries >= pel_reject_limit )
 	{
 		elog(WARNING, "pg_dbms_errlog.reject_limit is reached, no further"
 					  " error is handled");

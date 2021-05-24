@@ -135,7 +135,7 @@ bool pel_done = false;
 bool pel_enabled = false;
 int pel_frequency = 60;
 int pel_max_workers = 1;
-int  pel_reject_limit = 0;
+int  pel_reject_limit = -1;
 char *query_tag = NULL;
 int pel_synchronous = PEL_SYNC_XACT;
 bool pel_no_client_error = true;
@@ -349,12 +349,12 @@ _PG_init(void)
 
 	DefineCustomIntVariable("pg_dbms_errlog.reject_limit",
 				"Maximum number of errors that can be encountered before the DML"
-				" statement terminates and rolls back. A value of -1 mean unlimited."
-				" The default reject limit is zero, which means that upon encountering"
-				" the first error, the error is logged and the statement rolls back.",
+				" statement terminates and rolls back. A value of -1 mean unlimited,"
+				" this is the default. When reject limit is zero no error is logged"
+				" and the statement rolls back.",
 				NULL,
 				&pel_reject_limit,
-				0,
+				-1,
 				-1,
 				INT_MAX,
 				PGC_USERSET, /* Any user can set it */
