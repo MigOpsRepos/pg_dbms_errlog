@@ -1,3 +1,95 @@
+Tue May 25 2021 - Version 2.0
+
+This major release replace pg_background with a custom infrastructure.
+It adds the following infrastructure:
+    
+  - queue in dynamic shared memory of error information that can be
+    processed asynchronously
+    
+  - a dynamic background worker that can process the queued error and
+    insert the data in the corresponding error table, launching dynamic
+    background workers that can process the data in batch
+    
+  - a notification system so the backends can ask the background worker
+    to start processing queue items they just processed immediately,
+    and be notified when the work is done to reduce the waiting time as
+    much as possible
+    
+This fixes multiples issues with the pg_background approach:
+    
+  - we don't have to launch a dynamic bgworker per error anymore
+   
+  - if a dynamic bgworker can't be launched, the error data isn't lost
+    and will be reprocessed until it's successful
+   
+  - we can (although it's not done yet) implement various "synchronous"
+    mode, for instance [ off | query | transaction ], and options to
+    start processing queued error in the background before the commit
+    if the queue becomes too large
+    
+  - we can (although it's not done yet) implement a memory limit on the
+    queue size
+
+Complete list of changes:
+
+  - Fix batch script with synchronous setting. Gilles Darold
+  - Fix detection when pg_dbms_errlog.reject_limit is reached for further
+    error handling. Gilles Darold
+  - Add extension upgrade file from 1.3 to 2.0. Gilles Darold
+  - Remove extension downgrade SQL file for version 1.x. Gilles Darold
+  - Add missing SQL extension file for version 1.x. Gilles Darold
+  - Update documentation to new extension design. Gilles Darold
+  - Change the default value of reject_limit to -1 (unlimited) and add
+    support to unlimited logging. Gilles Darold
+  - Update files headers. Gilles Darold
+  - Fix portability to PG version prior 14. Gilles Darold
+  - Fix SQL upgrade script for queue_size(). Julien Rouhaud
+  - Don't throw errors in pel_log_error and always call the previous
+    emit_log_hook. Julien Rouhaud
+  - Handle the reject_limit GUC parameter and add a new queue_size()
+    SQL function. Julien Rouhaud
+  - Remove the unnecessary LOAD 'pg_dbms_errlog' calls in regression
+    tests. Julien Rouhaud
+  - Change synchronous GUC to [ off | query | transaction ] enum,
+    default to xact. Julien Rouhaud
+  - When pg_dbms_errlog.enabled is false prevent executing useless code.
+    Gilles Darold
+  - Add missing call to chained emit_log_hook in perl_errlog function.
+    Gilles Darold
+  - Remove obsolete function pel_unregister_errlog_table(), now the
+    unregistration is handled at event triggger level. Gilles Darold
+  - Fix case where subsequent error was not logged. Gilles Darold
+  - Fix privilege issues on using pg_dbms_errlog as a basic user like
+    Oracle DBMS_ERRLOG behavior. Gilles Darold
+  - Add regression test for privilege on errorlog table. Gilles Darold
+  - Add forgotten pg_dbms_errlog--1.1--2.0.sql script file.
+    Julien Rouhaud
+  - Fix compatibility with PostgreSQL version prior 12. Julien Rouhaud
+  - bgworker: check if any work is queued before sleeping. Julien
+    Rouhaud
+  - If we just processed some queued entries, check if some more work
+    has been queue since we last woke up and process it immediately,
+    otherwise we might miss some request from backends and let them
+    wait up to pel_frequency, as their SetLatch could be reset by
+    the dynamic bgworker infrastructure. Restart the main bgworker
+    immediately. Note that the main bgworker can hit an error and
+    restart if the dynamic bgworker fails, for instance if it tries
+    to process entries for a database than has been dropped since.
+    This scenario should be tested and fixed but for now simply reduce
+    the time needed for the main bgworker to restart in case of
+    problem. Julien Rouhaud
+  - Add a pg_dbms_errlog.debug GUC. Julien Rouhaud
+  - Add compatibility with pg14. Julien Rouhaud
+  - Fix COMMIT/ROLLBACK detection for PG prior 12. Julien Rouhaud
+  - Similarly to pg13+ and the QueryCompletion field, the completionTag
+    for a COMMIT/ROLLBACK only reports ROLLBACK in processUtility, and
+    kept empty for a COMMIT. Julien Rouhaud
+  - Some regression tests are still failing but let's fix the code
+    compilation first. Julien Rouhaud
+  - Fix some portability issues with PostgreSQL prior v13. Gilles Darold
+  - Add some debug messages to bgworker and error queuing. Gilles Darold
+  - Some cleanup & new infrastructure. Julien Rouhaud
+
 Tue May 25 2021 - Version 1.3
 
   - Register errors into error log tables as superuser to avoid granting
