@@ -1,0 +1,28 @@
+Tue May 25 2021 - Version 1.3
+
+  - Register errors into error log tables as superuser to avoid granting
+    priviledge to users. Gilles Darold
+  - Make sure tests output are stable. Julien Rouhaud
+  - Avoid too long lines and reindent the code. Julien Rouhaud
+  - Remove forgotten useless declaration. Julien Rouhaud
+  - Fix various dangling pointer issues. Julien Rouhaud
+  - Update AUTHORS file. Gilles Darold
+  - Add support to PostgreSQL v14. Gilles Darold
+  - Fix support of PostgreSQL version prior 13. Gilles Darold
+
+Mon May 10 2021 - Version 1.2
+
+  - Add bind parameters to error messages to be able to restore the failing
+    statement. Gilles Darold
+  - Add missing files for partition regression test. Gilles Darold
+  - Add regression test for partionned table logging. Gilles Darold
+
+Mon May 10 2021 - Version 1.1
+
+  - Replace internal handling of DropStmt when a DROP TABLE is issued by an
+    event trigger on sql_drop to handle DROP SCHEMA CASCADE. Gilles Darold
+  - Add verification that DML table to create is not null. Gilles Darold
+
+Sun May 9 2021 - Version 1.0
+
+    Initial version
