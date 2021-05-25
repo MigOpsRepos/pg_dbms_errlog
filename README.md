@@ -376,13 +376,13 @@ print "Create the extension and initialize the test\n";
 print "---------------------------------------------\n";
 $dbh->do("CREATE EXTENSION pg_dbms_errlog");
 $dbh->do("LOAD 'pg_dbms_errlog'");
-$dbh->do("SET pg_dbms_errlog.synchronous = on;");
+$dbh->do("SET pg_dbms_errlog.synchronous TO 'transaction'");
 $dbh->do("CREATE TABLE t1 (a bigint PRIMARY KEY, lbl text)");
-$dbh->do("CALL dbms_errlog.create_error_log('t1');");
+$dbh->do("CALL dbms_errlog.create_error_log('t1')");
 $dbh->do("SET pg_dbms_errlog.query_tag TO 'daily_load'");
 $dbh->do("SET pg_dbms_errlog.reject_limit TO 25");
 $dbh->do("SET pg_dbms_errlog.enabled TO true");
-$dbh->do("BEGIN;");
+$dbh->do("BEGIN");
 print "---------------------------------------------\n";
 print "Start DML work\n";
 print "---------------------------------------------\n";
@@ -411,6 +411,8 @@ $sth->execute();
 while (my $row = $sth->fetch) {
 	print "INSERTED ID: $row->[0]\n";
 }
+$dbh->do("COMMIT;");
+
 print "---------------------------------------------\n";
 print "Look at failing insert in error logging table\n";
 print "---------------------------------------------\n";
@@ -419,7 +421,6 @@ $sth->execute();
 while (my $row = $sth->fetch) {
 	print "ERROR: LOGGED: ", join(' | ', @$row), "\n";
 }
-$dbh->do("COMMIT;");
 
 $dbh->disconnect;
 
