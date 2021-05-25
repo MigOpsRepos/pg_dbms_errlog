@@ -229,10 +229,10 @@ pel_prepare_entry(void)
 	local_data.entry = dsa_get_address(local_data.area, local_data.pentry);
 
 	if (pel_reject_limit > -1 &&
-			local_data.entry->max_entries >= pel_reject_limit )
+			local_data.entry->num_entries >= pel_reject_limit )
 	{
-		elog(WARNING, "pg_dbms_errlog.reject_limit is reached, no further"
-					  " error is handled");
+		elog(WARNING, "pg_dbms_errlog.reject_limit (%d) is reached (queue entries= %d), no further"
+					  " error is handled", pel_reject_limit, local_data.entry->num_entries);
 		pel_cleanup_local();
 		return false;
 	}
