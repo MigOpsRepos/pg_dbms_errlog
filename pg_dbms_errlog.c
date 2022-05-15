@@ -160,7 +160,6 @@ struct HTAB *PreparedCache = NULL;
 
 /* Functions declaration */
 void        _PG_init(void);
-void        _PG_fini(void);
 
 extern PGDLLEXPORT Datum pg_dbms_errlog_publish_queue(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(pg_dbms_errlog_publish_queue);
@@ -444,23 +443,6 @@ _PG_init(void)
 	worker.bgw_main_arg = (Datum) 0;
 	worker.bgw_notify_pid = 0;
 	RegisterBackgroundWorker(&worker);
-}
-
-/*
- * Module unload callback
- */
-void
-_PG_fini(void)
-{
-	/* Uninstall hooks */
-	shmem_startup_hook = prev_shmem_startup_hook;
-	ProcessUtility_hook = prev_ProcessUtility;
-	ExecutorStart_hook = prev_ExecutorStart;
-	ExecutorRun_hook = prev_ExecutorRun;
-	ExecutorFinish_hook = prev_ExecutorFinish;
-	ExecutorEnd_hook = prev_ExecutorEnd;
-	emit_log_hook = prev_emit_log_hook;
-	post_parse_analyze_hook = prev_post_parse_analyze_hook;
 }
 
 PGDLLEXPORT Datum
