@@ -231,7 +231,7 @@ pel_prepare_entry(void)
 	if (pel_reject_limit > -1 &&
 			local_data.entry->num_entries >= pel_reject_limit )
 	{
-		elog(WARNING, "pg_dbms_errlog.reject_limit (%d) is reached (queue entries= %d), no further"
+		elog(WARNING, "pg_dbms_errlog.reject_limit (%d) is reached (queue_entries=%d), no further"
 					  " error is handled", pel_reject_limit, local_data.entry->num_entries);
 		pel_cleanup_local();
 		return false;
