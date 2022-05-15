@@ -34,8 +34,7 @@ BEGIN
     SELECT n.nspname, c.relname INTO STRICT err_log_namespace, dml_table_name FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_class c ON (c.relnamespace = n.oid) WHERE c.oid = dml_table_name::regclass::oid;
     -- Set the name of the error table if it is not provided
     IF err_log_table_name IS NULL THEN
-        fqdn_pos := position('.' IN dml_table_name) + 1;
-        err_log_tbname := 'ERR$_'||substring(dml_table_name FROM fqdn_pos FOR 58);
+        err_log_tbname := 'ERR$_'||substring(dml_table_name FROM 1 FOR 58);
     ELSE
         -- Remove quoting from table name if any
         err_log_table_name := replace(err_log_table_name, '"', '');
