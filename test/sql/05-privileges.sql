@@ -115,10 +115,12 @@ SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
 ----
 -- Try error logging creation by non superuser role
 ----
-CREATE TABLE t2 (
+CREATE SCHEMA pel_u1;
+GRANT ALL ON SCHEMA pel_u1 TO pel_u1;
+CREATE TABLE pel_u1.t3 (
     id int NOT NULL
 );
-GRANT ALL ON t2 TO pel_u1;
+GRANT ALL ON pel_u1.t3 TO pel_u1;
 GRANT ALL ON dbms_errlog.register_errlog_tables TO pel_u1;
 
 SET SESSION AUTHORIZATION 'pel_u1';
@@ -128,33 +130,34 @@ SET pg_dbms_errlog.query_tag TO 'daily_load4';
 SET pg_dbms_errlog.reject_limit TO 25;
 SET pg_dbms_errlog.enabled TO true;
 
--- Create the error log table for relation t2 as non superuser role
-CALL dbms_errlog.create_error_log('t2');
+-- Create the error log table for relation pel_u1.t3 as non superuser role
+CALL dbms_errlog.create_error_log('pel_u1.t3', 'pel_u1."ERR$_t3"');
 -- Verify that it have been registered
 SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
 
 -- Start a transaction
 BEGIN;
 SAVEPOINT aze;
--- Insert will fail for NULL value and will be registered in ERR$_t2
-INSERT INTO t2 VALUES (NULL);
+-- Insert will fail for NULL value and will be registered in pel_u1.ERR$_t3
+INSERT INTO pel_u1.t3 VALUES (NULL);
 ROLLBACK TO aze;
 COMMIT;
 
 -- Show content of the error log table with test user.
 \x
-SELECT * FROM "ERR$_t2"
+SELECT * FROM pel_u1."ERR$_t3"
 ORDER BY "pg_err_number$" COLLATE "C", "pg_err_mesg$" COLLATE "C";
 \x
 
 -- cleanup
-DROP TABLE t2; -- will fail
-DROP TABLE "ERR$_t2"; -- will be dropped
+DROP TABLE pel_u1.t3; -- will fail
+DROP TABLE pel_u1."ERR$_t3"; -- will be dropped
 SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
 
 SET SESSION AUTHORIZATION DEFAULT;
 
-DROP TABLE t2;
+DROP TABLE pel_u1.t3;
+DROP SCHEMA pel_u1;
 SELECT count(*) FROM dbms_errlog.register_errlog_tables ;
 REVOKE ALL ON dbms_errlog.register_errlog_tables FROM pel_u1;
 DROP ROLE pel_u1;

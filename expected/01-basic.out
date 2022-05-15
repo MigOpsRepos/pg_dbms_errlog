@@ -309,7 +309,7 @@ SELECT 1 AS exp, * FROM dbms_errlog.queue_size();
 
 -- should fail complaining that reject_limit has been reached
 INSERT INTO t1 VALUES ('queue 11b');
-WARNING:  pg_dbms_errlog.reject_limit is reached, no further error is handled
+WARNING:  pg_dbms_errlog.reject_limit (1) is reached (queue_entries=1), no further error is handled
 ERROR:  invalid input syntax for type bigint: "queue 11b"
 LINE 1: INSERT INTO t1 VALUES ('queue 11b');
                                ^
