@@ -98,6 +98,9 @@ PG_MODULE_MAGIC;
 #define PEL_TRANCHE_NAME		"pg_dbms_errlog"
 
 /* Saved hook values in case of unload */
+#if PG_VERSION_NUM >= 150000
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+#endif
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
@@ -166,6 +169,9 @@ PG_FUNCTION_INFO_V1(pg_dbms_errlog_publish_queue);
 extern PGDLLEXPORT Datum pg_dbms_errlog_queue_size(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(pg_dbms_errlog_queue_size);
 
+#if PG_VERSION_NUM >= 150000
+static void pel_shmem_request(void);
+#endif
 static void pel_shmem_startup(void);
 static void pel_ProcessUtility(PEL_PROCESSUTILITY_PROTO);
 static void pel_ExecutorStart(QueryDesc *queryDesc, int eflags);
@@ -407,16 +413,25 @@ _PG_init(void)
 
 	EmitWarningsOnPlaceholders("pg_dbms_errlog");
 
+#if PG_VERSION_NUM < 150000
 	/*
 	 * Request additional shared resources.  (These are no-ops if we're not in
 	 * the postmaster process.)  We'll allocate or attach to the shared
 	 * resources in pel_shmem_startup().
+	 *
+	 * If you change code here, don't forget to also report the modifications
+	 * in pel_shmem_request() for pg15 and later.
 	 */
 	RequestAddinShmemSpace(pel_memsize());
 	RequestNamedLWLockTranche(PEL_TRANCHE_NAME, 1);
+#endif
 
 
 	/* Install hooks */
+#if PG_VERSION_NUM >= 150000
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = pel_shmem_request;
+#endif
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = pel_shmem_startup;
 	prev_ProcessUtility = ProcessUtility_hook;
@@ -471,6 +486,22 @@ pg_dbms_errlog_queue_size(PG_FUNCTION_ARGS)
 	else
 		PG_RETURN_INT32(num);
 }
+
+#if PG_VERSION_NUM >= 150000
+static void
+pel_shmem_request(void)
+{
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
+	/*
+	 * If you change code here, don't forget to also report the modifications in
+	 * _PG_init() for pg14 and below.
+	 */
+	RequestAddinShmemSpace(pel_memsize());
+	RequestNamedLWLockTranche(PEL_TRANCHE_NAME, 1);
+}
+#endif
 
 static void
 pel_shmem_startup(void)
