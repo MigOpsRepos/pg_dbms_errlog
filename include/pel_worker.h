@@ -17,7 +17,7 @@
 #include "postgres.h"
 
 #if PG_VERSION_NUM >= 100000
-void pel_worker_main(Datum main_arg) pg_attribute_noreturn();
-void pel_dynworker_main(Datum main_arg);
+PGDLLEXPORT void pel_worker_main(Datum main_arg) pg_attribute_noreturn();
+PGDLLEXPORT void pel_dynworker_main(Datum main_arg);
 #endif			/* pg10 */
 #endif			/* _PEL_WORKER_H */
