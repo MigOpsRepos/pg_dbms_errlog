@@ -1,3 +1,24 @@
+Mon December 26 2022 - Version 2.1
+
+This maintenance release fix some issues reported by users since past
+six months.
+ 
+  - Add missing PGDLLEXPORT markings. Thanks to Julien Rouhaud for the patch.
+    Remove useless call to position.
+  - Fix function create_error_log() to use the schema of the table to log
+    instead of default schema (public or from search_path).  The function
+    now also check that the table to log exists and use quote_ident() in
+    the errorlog table creation.
+  - Fix compatibility with pg15 new shmem_request_hook. Thanks to Julien Rouhaud
+    for the patch.
+  - Fix regression tests for pg15 since PUBLIC doesn't have CREATE privilege on
+    the public schema by default. Thanks to Julien Rouhaud for the patch.
+  - Remove _PG_fini(). Thanks to Julien Rouhaud for the patch.
+  - Fix compatibility with pg14 new process utility hook prototype. Thanks to
+    Julien Rouhaud for the patch.
+  - Fix regression test with new warning format. Thanks to Julien Rouhaud for
+    the patch.
+
 Tue May 25 2021 - Version 2.0
 
 This major release replace pg_background with a custom infrastructure.
